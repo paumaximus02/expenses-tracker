@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Notifications · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head page-head-row">
+  <div>
+    <h1>Notifications</h1>
+    <p class="subtitle">History of sync results and other updates</p>
+  </div>
+  {% if notifications %}
+    <form method="post" action="{{ url_for('mark_all_notifications_read') }}">
+      <button type="submit" class="btn btn-secondary">Mark all read</button>
+    </form>
+  {% endif %}
+</section>
+
+{% if notifications %}
+  <div class="notification-list">
+    {% for notification in notifications %}
+      <article class="notification-item notification-{{ notification.level.value }}{% if not notification.is_read %} notification-unread{% endif %}">
+        <div class="notification-item-head">
+          <span class="notification-type">{{ notification.type.value }}</span>
+          <time class="local-datetime" datetime="{{ notification.created_at.isoformat() }}">
+            {{ format_notification_time(notification.created_at) }}
+          </time>
+        </div>
+        <h2>{{ notification.title }}</h2>
+        <p>{{ notification.message }}</p>
+        {% if notification.type.value == 'sync' and notification.import_count %}
+          <p class="notification-item-action">
+            <a href="{{ url_for('review_sync', notification_id=notification.id) }}">
+              Review {{ notification.import_count }} new transaction{% if notification.import_count != 1 %}s{% endif %}
+            </a>
+          </p>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No notifications yet. Run a Gmail sync to create the first one.</p>
+  </div>
+{% endif %}
+{% endblock %}

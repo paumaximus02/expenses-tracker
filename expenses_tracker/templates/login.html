@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Log in · Expenses Tracker{% endblock %}
+{% block content %}
+  <section class="auth-page">
+    <div class="auth-card">
+      <h1>Log in</h1>
+      <p class="auth-lead">Sign in to manage household expenses.</p>
+      <form method="post" class="auth-form">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" name="email" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="btn btn-primary auth-submit">Log in</button>
+      </form>
+      {% if allow_signup %}
+        <p class="auth-switch">
+          Need an account? <a href="{{ url_for('signup') }}">Sign up</a>
+        </p>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

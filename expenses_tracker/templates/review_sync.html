@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Review sync · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>New from sync</h1>
+    <p class="subtitle">
+      {{ expenses|length }} transaction(s) from
+      <time class="local-datetime" datetime="{{ notification.created_at.isoformat() }}">
+        {{ format_notification_time(notification.created_at) }}
+      </time>
+      {% if pending_count %} · {{ pending_count }} need a bucket{% endif %}
+      {% if assigned_count %} · {{ assigned_count }} auto-assigned{% endif %}
+    </p>
+  </div>
+</section>
+
+<div class="card-list">
+  {% for expense in expenses %}
+    <article class="expense-card">
+      <div class="expense-main">
+        <div class="expense-top">
+          <span class="amount">${{ "%.2f"|format(expense.amount) }}</span>
+          <span class="date">{{ expense.transaction_date }}</span>
+        </div>
+        <h2 class="merchant">{{ format_merchant(expense.merchant) }}</h2>
+        <div class="meta">
+          <span class="pill">{{ expense.card_holder or expense.card_last_four or "Unknown card" }}</span>
+          {% if expense.status.value == 'pending' %}
+            <span class="pill pill-warn">Needs bucket</span>
+          {% elif expense.status.value == 'auto' %}
+            <span class="pill pill-suggest">Auto-assigned</span>
+          {% else %}
+            <span class="pill">Assigned by rule</span>
+          {% endif %}
+          {% if expense.bucket_name %}
+            <span class="pill">{{ expense.bucket_name }}</span>
+          {% elif expense.suggested_bucket_name %}
+            <span class="pill pill-suggest">Suggests: {{ expense.suggested_bucket_name }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <form method="post" action="{{ url_for('confirm_expense', expense_id=expense.id) }}" class="assign-form">
+        <input type="hidden" name="sync_notification_id" value="{{ notification.id }}">
+        <input type="hidden" name="redirect_to" value="sync_review">
+        <label class="field">
+          <span>Bucket</span>
+          {% with selected_id=expense.bucket_id or expense.suggested_bucket_id, required=true %}
+            {% include "_bucket_select.html" %}
+          {% endwith %}
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="create_rule" {% if expense.status.value == 'pending' %}checked{% endif %}>
+          Remember this merchant
+        </label>
+        <button type="submit" class="btn btn-primary">
+          {% if expense.status.value == 'pending' %}Confirm{% else %}Update{% endif %}
+        </button>
+      </form>
+    </article>
+  {% endfor %}
+</div>
+{% endblock %}

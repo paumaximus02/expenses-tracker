@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Settings · Expenses Tracker{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Household settings</h1>
+    <p class="page-lead">Manage your household name, invite code, card mapping, and Gmail connection.</p>
+  </section>
+
+  <div class="settings-grid">
+    <section class="panel">
+      <h2>Invite someone</h2>
+      <p class="settings-help">Share this code so a spouse can join your household at signup.</p>
+      <div class="invite-code-row">
+        <code id="invite-code" class="invite-code">{{ tenant.invite_code }}</code>
+        <button type="button" class="btn btn-secondary" id="copy-invite-code">Copy</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Household details</h2>
+      <form method="post" class="settings-form">
+        <label class="field">
+          <span>Household name</span>
+          <input type="text" name="household_name" value="{{ tenant.name }}" required>
+        </label>
+        <label class="field">
+          <span>Card holders</span>
+          <input type="text" name="card_holders" value="{{ card_holders_text }}" placeholder="4149:Juan,1201:Debora">
+        </label>
+        <label class="field">
+          <span>Gmail search query</span>
+          <input type="text" name="gmail_search_query" value="{{ tenant.gmail_search_query }}">
+        </label>
+        <button type="submit" class="btn btn-primary">Save settings</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Gmail connection</h2>
+      {% if gmail_connected %}
+        <p class="settings-status settings-status-ok">Gmail is connected for this household.</p>
+      {% else %}
+        <p class="settings-status settings-status-warn">Gmail is not connected yet.</p>
+      {% endif %}
+      <p class="settings-help">
+        Add <code>{{ url_for('gmail_oauth_callback', _external=True) }}</code> as an authorized redirect URI in Google Cloud Console.
+      </p>
+      <a href="{{ url_for('gmail_connect') }}" class="btn btn-secondary">
+        {% if gmail_connected %}Reconnect Gmail{% else %}Connect Gmail{% endif %}
+      </a>
+    </section>
+  </div>
+{% endblock %}

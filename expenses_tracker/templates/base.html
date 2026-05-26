@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Expenses Tracker{% endblock %}</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body{% if not hide_nav|default(false) %}
+  data-sync-start-url="{{ url_for('sync_start') }}"
+  data-sync-status-url="{{ url_for('sync_status') }}"
+  data-trigger-background-sync="{{ '1' if trigger_background_sync else '0' }}"
+  data-sync-in-progress="{{ '1' if sync_in_progress else '0' }}"
+{% endif %}>
+  {% if not hide_nav|default(false) %}
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand-logo"
+           src="{{ url_for('static', filename='logo.png') }}"
+           alt="Expenses Tracker"
+           width="40"
+           height="40">
+      <span class="brand-name">Expenses Tracker</span>
+    </div>
+    <nav class="nav" id="site-nav">
+      <a href="{{ url_for('review') }}" class="{% if page == 'review' %}active{% endif %}">Pending</a>
+      <a href="{{ url_for('expenses_page') }}" class="{% if page == 'expenses' %}active{% endif %}">Expenses</a>
+      <a href="{{ url_for('groups') }}" class="{% if page == 'groups' %}active{% endif %}">Groups</a>
+      <a href="{{ url_for('buckets_page') }}" class="{% if page == 'buckets' %}active{% endif %}">Buckets</a>
+      <a href="{{ url_for('report') }}" class="{% if page == 'report' %}active{% endif %}">Report</a>
+      <a href="{{ url_for('rules') }}" class="{% if page == 'rules' %}active{% endif %}">Rules</a>
+      <a href="{{ url_for('settings_page') }}" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
+    </nav>
+    <button type="button"
+            class="nav-toggle btn btn-secondary"
+            id="nav-toggle"
+            aria-expanded="false"
+            aria-controls="site-nav">
+      Menu
+    </button>
+    <div class="topbar-actions">
+      {% if auth_enabled and current_user %}
+        <span class="user-label">{{ current_user.email }}</span>
+        <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+          <button type="submit" class="btn btn-secondary">Log out</button>
+        </form>
+      {% endif %}
+      <div class="notifications-menu"
+           data-mark-read-url="{{ url_for('mark_all_notifications_read') }}">
+        <button type="button"
+                class="notifications-button"
+                id="notifications-toggle"
+                aria-expanded="false"
+                aria-controls="notifications-panel"
+                aria-label="Notifications">
+          <span class="notifications-icon" aria-hidden="true">🔔</span>
+          {% if notifications_unread_count %}
+            <span class="notifications-badge" id="notifications-badge">{{ notifications_unread_count }}</span>
+          {% endif %}
+        </button>
+        <div class="notifications-panel" id="notifications-panel" hidden>
+          <div class="notifications-panel-head">
+            <strong>Notifications</strong>
+            <a href="{{ url_for('notifications_page') }}">View all</a>
+          </div>
+          {% if recent_notifications %}
+            <ul class="notifications-dropdown-list">
+              {% for notification in recent_notifications %}
+                <li class="notification-dropdown-item notification-{{ notification.level.value }}{% if not notification.is_read %} notification-unread{% endif %}">
+                  <div class="notification-dropdown-title">{{ notification.title }}</div>
+                  <div class="notification-dropdown-message">{{ notification.message }}</div>
+                  {% if notification.type.value == 'sync' and notification.import_count %}
+                    <a class="notification-action" href="{{ url_for('review_sync', notification_id=notification.id) }}">
+                      Review {{ notification.import_count }} new transaction{% if notification.import_count != 1 %}s{% endif %}
+                    </a>
+                  {% endif %}
+                  <time class="local-datetime" datetime="{{ notification.created_at.isoformat() }}">
+                    {{ format_notification_time(notification.created_at) }}
+                  </time>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="notifications-empty">No notifications yet.</p>
+          {% endif %}
+        </div>
+      </div>
+      <form method="post" action="{{ url_for('sync_inbox') }}" class="sync-form" id="sync-form">
+        <button type="submit" class="btn btn-secondary" id="sync-button">
+          <span class="sync-button-label">Sync Gmail</span>
+        </button>
+      </form>
+    </div>
+  </header>
+  {% else %}
+  <header class="topbar topbar-minimal">
+    <div class="brand">
+      <img class="brand-logo"
+           src="{{ url_for('static', filename='logo.png') }}"
+           alt="Expenses Tracker"
+           width="40"
+           height="40">
+      <span class="brand-name">Expenses Tracker</span>
+    </div>
+  </header>
+  {% endif %}
+
+  {% if not hide_nav|default(false) %}
+  <div class="sync-banner" id="sync-banner" hidden aria-live="polite">
+    <span class="sync-banner-text">Syncing Gmail in the background. You'll get a notification when it's done.</span>
+    <button type="button"
+            class="sync-banner-dismiss btn btn-secondary"
+            id="sync-banner-dismiss"
+            aria-label="Dismiss sync message">
+      Dismiss
+    </button>
+  </div>
+  {% endif %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-wrap">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

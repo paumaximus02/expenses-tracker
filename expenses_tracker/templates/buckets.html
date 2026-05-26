@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% macro render_bucket_nodes(nodes, depth=0) %}
+  {% for node in nodes %}
+    <div class="bucket-row" style="--depth: {{ depth }}">
+      <div class="bucket-info">
+        <strong>{{ node.bucket.name }}</strong>
+        {% if node.bucket.parent_id %}
+          <span class="muted">under {{ node.bucket.parent_name }}</span>
+        {% elif node.children %}
+          <span class="pill">Category</span>
+        {% else %}
+          <span class="pill">Top level</span>
+        {% endif %}
+        {% if node.children %}
+          <span class="pill">{{ node.children|length }} sub-bucket(s)</span>
+        {% endif %}
+        {% if node.bucket.exclude_from_report %}
+          <span class="pill pill-warn">Excluded from report</span>
+        {% endif %}
+      </div>
+      <details class="bucket-actions">
+        <summary>Edit</summary>
+        <form method="post" action="{{ url_for('edit_bucket', bucket_id=node.bucket.id) }}" class="inline-form">
+          <label class="field">
+            <span>Name</span>
+            <input type="text" name="name" value="{{ node.bucket.name }}" required>
+          </label>
+          <label class="field">
+            <span>Parent</span>
+            <select name="parent_id">
+              <option value="none" {% if not node.bucket.parent_id %}selected{% endif %}>Top level</option>
+              {% for parent in parent_options if parent.id != node.bucket.id and not parent.parent_id %}
+                <option value="{{ parent.id }}"
+                  {% if node.bucket.parent_id == parent.id %}selected{% endif %}>
+                  {{ parent.display_path }}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" name="exclude_from_report" {% if node.bucket.exclude_from_report %}checked{% endif %}>
+            Exclude from monthly report (e.g. to be refunded)
+          </label>
+          <button type="submit" class="btn btn-secondary">Save</button>
+        </form>
+        <form method="post" action="{{ url_for('delete_bucket', bucket_id=node.bucket.id) }}" class="inline-form">
+          <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this bucket?')">Delete</button>
+        </form>
+      </details>
+    </div>
+    {% if node.children %}
+      {{ render_bucket_nodes(node.children, depth + 1) }}
+    {% endif %}
+  {% endfor %}
+{% endmacro %}
+
+{% block title %}Buckets · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Buckets</h1>
+    <p class="subtitle">Organize categories and sub-buckets (e.g. Car → Gas, Repairs)</p>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Create bucket</h2>
+  <form method="post" action="{{ url_for('create_bucket') }}" class="create-bucket-form">
+    <label class="field">
+      <span>Name</span>
+      <input type="text" name="name" placeholder="Gas" required>
+    </label>
+    <label class="field">
+      <span>Parent (optional)</span>
+      <select name="parent_id">
+        <option value="">Top level</option>
+        {% for parent in parent_options %}
+          <option value="{{ parent.id }}">{{ parent.display_path }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" name="exclude_from_report">
+      Exclude from monthly report (e.g. to be refunded)
+    </label>
+    <button type="submit" class="btn btn-primary">Add bucket</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Your buckets</h2>
+  {% if bucket_tree %}
+    <div class="bucket-tree">
+      {{ render_bucket_nodes(bucket_tree) }}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>No buckets yet.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

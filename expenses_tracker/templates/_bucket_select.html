@@ -1,0 +1,10 @@
+<select name="{{ name|default('bucket_id') }}" {% if required %}required{% endif %}>
+  <option value="">Choose…</option>
+  {% for opt in bucket_options %}
+    <option value="{{ opt.id }}"
+      {% if selected_id == opt.id %}selected{% endif %}
+      {% if opt.depth > 0 %}class="sub-option"{% endif %}>
+      {% if opt.depth > 0 %}↳ {% endif %}{{ opt.label }}
+    </option>
+  {% endfor %}
+</select>

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Report · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Monthly report</h1>
+    <p class="subtitle">Out-of-pocket totals (reimbursements excluded)</p>
+  </div>
+</section>
+
+<form method="get" action="{{ url_for('report') }}" class="filters">
+  <label class="field">
+    <span>Month</span>
+    <input type="month" name="month" value="{{ month }}">
+  </label>
+  <label class="field">
+    <span>Person</span>
+    <select name="person">
+      <option value="">Everyone</option>
+      {% for holder in holders %}
+        <option value="{{ holder }}" {% if person == holder %}selected{% endif %}>{{ holder }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="btn btn-secondary">Update</button>
+</form>
+
+<section class="report-summary">
+  <p class="report-summary-label">
+    {% if person %}{{ person }} · {% endif %}{{ month }}
+  </p>
+  <p class="report-summary-total">${{ "%.2f"|format(grand_total) }}</p>
+  <p class="report-summary-meta">
+    {% if transaction_count %}
+      {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
+    {% else %}
+      No counted expenses{% if person %} for {{ person }}{% endif %}
+    {% endif %}
+  </p>
+</section>
+
+{% if totals %}
+  <section class="panel">
+    <h2>By bucket</h2>
+    <div class="report-table-wrap">
+      <table class="report-table responsive-table">
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th>Transactions</th>
+            <th class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for bucket_id, bucket_name, total, count in totals %}
+            <tr class="report-row-link"
+                tabindex="0"
+                role="link"
+                data-href="{{ url_for('expenses_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('expenses_page', month=month, person=person or none, unassigned=1) }}">
+              <td data-label="Bucket">{{ bucket_name }}</td>
+              <td data-label="Transactions">{{ count }}</td>
+              <td class="num" data-label="Total">${{ "%.2f"|format(total) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% else %}
+  <div class="empty-state">
+    <p>No counted expenses for this period{% if person %} ({{ person }}){% endif %}.</p>
+  </div>
+{% endif %}
+
+{% if excluded_totals %}
+  <section class="panel panel-muted">
+    <h2>Excluded from report</h2>
+    <p class="subtitle">Reimbursements and other items not counted above</p>
+    <div class="report-table-wrap">
+      <table class="report-table responsive-table">
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th>Transactions</th>
+            <th class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for bucket_name, total, count in excluded_totals %}
+            <tr>
+              <td data-label="Bucket">{{ bucket_name }}</td>
+              <td data-label="Transactions">{{ count }}</td>
+              <td class="num" data-label="Total">${{ "%.2f"|format(total) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th data-label="Summary">Excluded total</th>
+            <th data-label="Transactions"></th>
+            <th class="num" data-label="Total">${{ "%.2f"|format(excluded_total) }}</th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+{% endif %}
+<script>
+  document.querySelectorAll(".report-row-link").forEach((row) => {
+    row.addEventListener("click", () => {
+      window.location = row.dataset.href;
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        window.location = row.dataset.href;
+      }
+    });
+  });
+</script>
+{% endblock %}

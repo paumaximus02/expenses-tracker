@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Rules · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Merchant rules</h1>
+    <p class="subtitle">Learned mappings for automatic assignment</p>
+  </div>
+</section>
+
+{% if rules %}
+  <div class="report-table-wrap">
+    <table class="report-table responsive-table">
+      <thead>
+        <tr>
+          <th>Merchant pattern</th>
+          <th>Match</th>
+          <th>Bucket</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in rules %}
+          <tr>
+            <td data-label="Merchant">{{ format_merchant(rule.merchant_pattern) }}</td>
+            <td data-label="Match">{{ rule.match_type.value }}</td>
+            <td data-label="Bucket">{{ rule.bucket_name }}</td>
+            <td data-label="Status">{% if rule.confirmed_by_user %}Confirmed{% else %}Auto{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No rules yet. Confirm expenses with “Remember this merchant” to build them.</p>
+  </div>
+{% endif %}
+{% endblock %}

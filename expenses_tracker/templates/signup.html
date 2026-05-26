@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Sign up · Expenses Tracker{% endblock %}
+{% block content %}
+  <section class="auth-page">
+    <div class="auth-card">
+      <h1>Sign up</h1>
+      <p class="auth-lead">Create a new household or join an existing one with an invite code.</p>
+      <form method="post" class="auth-form">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" name="email" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" name="password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <label class="field">
+          <span>Confirm password</span>
+          <input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <label class="field">
+          <span>Household name (new household)</span>
+          <input type="text" name="household_name" placeholder="Pauma household">
+        </label>
+        <label class="field">
+          <span>Invite code (join existing household)</span>
+          <input type="text" name="invite_code" placeholder="Optional">
+        </label>
+        <p class="auth-hint">Leave invite code blank to create a new household, or enter a code to join someone else's.</p>
+        <button type="submit" class="btn btn-primary auth-submit">Create account</button>
+      </form>
+      <p class="auth-switch">
+        Already have an account? <a href="{{ url_for('login') }}">Log in</a>
+      </p>
+    </div>
+  </section>
+{% endblock %}

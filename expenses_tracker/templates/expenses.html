@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Expenses · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>All expenses</h1>
+    <p class="subtitle">Review, reassign buckets, or exclude reimbursements from reports</p>
+  </div>
+</section>
+
+<form method="get" action="{{ url_for('expenses_page') }}" class="filters" id="expenses-filter-form">
+  {% if bucket_filter_name %}
+    <p class="filter-banner">
+      Showing <strong>{{ bucket_filter_name }}</strong>
+      {% if person %} · {{ person }}{% endif %}
+      · {{ month }}
+      <a href="{{ url_for('expenses_page', month=month, person=person or none, q=search, status=status_filter) }}">Clear bucket filter</a>
+    </p>
+  {% endif %}
+  <label class="field field-search">
+    <span>Search</span>
+    <input type="search" name="q" id="expenses-search" value="{{ search }}" placeholder="Merchant or amount">
+  </label>
+  <label class="field">
+    <span>Month</span>
+    <input type="month" name="month" id="expenses-month" value="{{ month }}">
+  </label>
+  <label class="field">
+    <span>Status</span>
+    <select name="status" id="expenses-status">
+      <option value="">All</option>
+      <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>Pending</option>
+      <option value="confirmed" {% if status_filter == 'confirmed' %}selected{% endif %}>Confirmed</option>
+      <option value="auto" {% if status_filter == 'auto' %}selected{% endif %}>Auto</option>
+    </select>
+  </label>
+  {% if person %}
+    <input type="hidden" name="person" value="{{ person }}">
+  {% endif %}
+  {% if bucket_id %}
+    <input type="hidden" name="bucket_id" value="{{ bucket_id }}">
+  {% endif %}
+  {% if unassigned %}
+    <input type="hidden" name="unassigned" value="1">
+  {% endif %}
+  <button type="submit" class="btn btn-secondary">Filter</button>
+  <p class="filters-hint">Type at least 2 characters to search</p>
+</form>
+
+{% if expenses %}
+  <div class="expense-table-wrap">
+    <table class="expense-table responsive-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Merchant</th>
+          <th>Person</th>
+          <th>Bucket</th>
+          <th class="num">Amount</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for expense in expenses %}
+          <tr class="{% if expense.excluded_from_report %}row-excluded{% endif %}">
+            <td data-label="Date">{{ expense.transaction_date }}</td>
+            <td data-label="Merchant">{{ format_merchant(expense.merchant) }}</td>
+            <td data-label="Person">{{ expense.card_holder or expense.card_last_four or "?" }}</td>
+            <td data-label="Bucket">
+              {{ expense.bucket_name or "Unassigned" }}
+              {% if expense.excluded_from_report %}
+                <span class="pill pill-warn">Excluded</span>
+              {% endif %}
+            </td>
+            <td class="num" data-label="Amount">${{ "%.2f"|format(expense.amount) }}</td>
+            <td data-label="Actions">
+              <details class="expense-edit">
+                <summary>Edit</summary>
+                <form method="post" action="{{ url_for('update_expense', expense_id=expense.id) }}" class="inline-form">
+                  <input type="hidden" name="month" value="{{ month }}">
+                  <input type="hidden" name="status" value="{{ status_filter }}">
+                  <input type="hidden" name="q" value="{{ search }}">
+                  <input type="hidden" name="person" value="{{ person }}">
+                  <input type="hidden" name="filter_bucket_id" value="{{ bucket_id or '' }}">
+                  {% if unassigned %}
+                    <input type="hidden" name="unassigned" value="1">
+                  {% endif %}
+                  <label class="field">
+                    <span>Bucket</span>
+                    {% with selected_id=expense.bucket_id, required=false, name='bucket_id' %}
+                      {% include "_bucket_select.html" %}
+                    {% endwith %}
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" name="exclude_from_report" {% if expense.exclude_from_report %}checked{% endif %}>
+                    Exclude this expense from monthly report
+                  </label>
+                  <button type="submit" class="btn btn-secondary">Save</button>
+                </form>
+                <form method="post"
+                      action="{{ url_for('delete_expense', expense_id=expense.id) }}"
+                      class="inline-form expense-delete-form"
+                      onsubmit="return confirm('Delete this transaction permanently?');">
+                  <input type="hidden" name="month" value="{{ month }}">
+                  <input type="hidden" name="status" value="{{ status_filter }}">
+                  <input type="hidden" name="q" value="{{ search }}">
+                  <input type="hidden" name="person" value="{{ person }}">
+                  <input type="hidden" name="filter_bucket_id" value="{{ bucket_id or '' }}">
+                  {% if unassigned %}
+                    <input type="hidden" name="unassigned" value="1">
+                  {% endif %}
+                  <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+              </details>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No expenses match this filter.</p>
+  </div>
+{% endif %}
+{% endblock %}

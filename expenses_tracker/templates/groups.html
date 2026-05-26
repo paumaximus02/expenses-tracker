@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Groups · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Merchant groups</h1>
+    <p class="subtitle">Edit selections, apply a bucket, or dismiss bad suggestions</p>
+  </div>
+</section>
+
+{% if enriched_suggestions %}
+  <div class="card-list">
+    {% for item in enriched_suggestions %}
+      {% set suggestion = item.suggestion %}
+      <article class="group-card">
+        <div class="group-main">
+          <h2>
+            {% if suggestion.suggested_bucket %}
+              Suggested: {{ suggestion.suggested_bucket }}
+            {% else %}
+              No single bucket suggested
+            {% endif %}
+          </h2>
+          <p class="reason">{{ suggestion.reason }}</p>
+          <p class="group-meta">
+            {% if suggestion.group_type == 'prefix' %}
+              Prefix group
+            {% elif suggestion.group_type == 'keyword' %}
+              Keyword group
+            {% else %}
+              Individual merchant
+            {% endif %}
+          </p>
+          <form method="post" action="{{ url_for('apply_group') }}" class="assign-form">
+            <fieldset class="merchant-checklist">
+              <legend>Merchants in this group</legend>
+              {% for merchant in suggestion.merchants %}
+                <label class="checkbox merchant-check">
+                  <input type="checkbox" name="merchants" value="{{ merchant }}" checked>
+                  {{ format_merchant(merchant) }}
+                </label>
+              {% endfor %}
+            </fieldset>
+            <label class="field">
+              <span>Assign bucket</span>
+              {% with selected_id=item.default_bucket_id, required=true %}
+                {% include "_bucket_select.html" %}
+              {% endwith %}
+            </label>
+            <div class="group-actions">
+              <button type="submit" class="btn btn-primary">Apply to selected</button>
+            </div>
+          </form>
+          <form method="post" action="{{ url_for('dismiss_group') }}" class="dismiss-form">
+            <input type="hidden" name="group_key" value="{{ suggestion.group_key }}">
+            <button type="submit" class="btn btn-secondary">
+              Dismiss suggestion
+            </button>
+          </form>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No pending merchant groups. Sync Gmail or finish the review queue first.</p>
+  </div>
+{% endif %}
+{% endblock %}
