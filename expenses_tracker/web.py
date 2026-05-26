@@ -76,21 +76,34 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.context_processor
     def inject_helpers():
-        db, sync = _services()
-        user = None if settings.auth_disabled else current_user(build_global_db(settings))
-        tenant = sync.tenant
-        return {
+        auth_db = build_global_db(settings)
+        user = None if settings.auth_disabled else current_user(auth_db)
+        helpers = {
             "format_merchant": format_merchant,
             "format_notification_time": format_notification_time,
-            "recent_notifications": db.list_notifications(limit=8),
-            "notifications_unread_count": db.count_unread_notifications(),
             "current_user": user,
-            "current_tenant": tenant,
             "auth_enabled": not settings.auth_disabled,
             "allow_signup": settings.allow_signup,
-            "trigger_background_sync": session.pop("trigger_background_sync", False),
-            "sync_in_progress": db.is_sync_in_progress(),
+            "trigger_background_sync": False,
+            "recent_notifications": [],
+            "notifications_unread_count": 0,
+            "current_tenant": None,
+            "sync_in_progress": False,
         }
+
+        if settings.auth_disabled or user is not None:
+            db, sync = _services()
+            helpers.update(
+                {
+                    "recent_notifications": db.list_notifications(limit=8),
+                    "notifications_unread_count": db.count_unread_notifications(),
+                    "current_tenant": sync.tenant,
+                    "trigger_background_sync": session.pop("trigger_background_sync", False),
+                    "sync_in_progress": db.is_sync_in_progress(),
+                }
+            )
+
+        return helpers
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
