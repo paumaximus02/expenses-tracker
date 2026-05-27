@@ -461,6 +461,30 @@
     }
   }
 
+  const reportFilterForm = document.getElementById("report-filter-form");
+  const reportMonth = document.getElementById("report-month");
+  const reportPerson = document.getElementById("report-person");
+
+  if (reportFilterForm) {
+    function submitReportFilter() {
+      const params = new URLSearchParams(new FormData(reportFilterForm));
+      const query = params.toString();
+      const url = query
+        ? `${reportFilterForm.action}?${query}`
+        : reportFilterForm.action;
+      window.history.replaceState(null, "", url);
+      reportFilterForm.requestSubmit();
+    }
+
+    if (reportMonth) {
+      reportMonth.addEventListener("change", submitReportFilter);
+    }
+
+    if (reportPerson) {
+      reportPerson.addEventListener("change", submitReportFilter);
+    }
+  }
+
   const copyInviteButton = document.getElementById("copy-invite-code");
   const inviteCode = document.getElementById("invite-code");
   if (copyInviteButton && inviteCode) {

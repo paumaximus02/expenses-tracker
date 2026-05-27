@@ -8,21 +8,20 @@
   </div>
 </section>
 
-<form method="get" action="{{ url_for('report') }}" class="filters">
+<form method="get" action="{{ url_for('report') }}" class="filters" id="report-filter-form">
   <label class="field">
     <span>Month</span>
-    <input type="month" name="month" value="{{ month }}">
+    <input type="month" name="month" id="report-month" value="{{ month }}">
   </label>
   <label class="field">
     <span>Person</span>
-    <select name="person">
+    <select name="person" id="report-person">
       <option value="">Everyone</option>
       {% for holder in holders %}
         <option value="{{ holder }}" {% if person == holder %}selected{% endif %}>{{ holder }}</option>
       {% endfor %}
     </select>
   </label>
-  <button type="submit" class="btn btn-secondary">Update</button>
 </form>
 
 <section class="report-summary">
