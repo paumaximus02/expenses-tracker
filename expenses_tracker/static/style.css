@@ -457,6 +457,23 @@ body {
   font-size: 0.95rem;
 }
 
+.report-amount-mask {
+  display: none;
+}
+
+.report-hide-amounts .report-amount-value {
+  display: none;
+}
+
+.report-hide-amounts .report-amount-mask {
+  display: inline;
+}
+
+.report-privacy-toggle {
+  align-self: end;
+  min-height: 44px;
+}
+
 .flash-wrap {
   max-width: 980px;
   margin: 1rem auto 0;

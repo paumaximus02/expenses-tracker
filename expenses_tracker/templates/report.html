@@ -22,14 +22,22 @@
       {% endfor %}
     </select>
   </label>
+  <label class="checkbox report-privacy-toggle">
+    <input type="checkbox" id="report-hide-amounts">
+    Hide dollar amounts
+  </label>
 </form>
 
+<div id="report-page">
 <section class="report-summary">
   <div class="report-summary-main">
     <p class="report-summary-label">
       {% if person %}{{ person }} · {% endif %}{{ month }}
     </p>
-    <p class="report-summary-total">${{ "%.2f"|format(grand_total) }}</p>
+    <p class="report-summary-total report-amount">
+      <span class="report-amount-value">${{ "%.2f"|format(grand_total) }}</span>
+      <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+    </p>
     <p class="report-summary-meta">
       {% if transaction_count %}
         {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
@@ -68,7 +76,10 @@
                 data-href="{{ url_for('expenses_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('expenses_page', month=month, person=person or none, unassigned=1) }}">
               <td data-label="Bucket">{{ bucket_name }}</td>
               <td data-label="Transactions">{{ count }}</td>
-              <td class="num" data-label="Total">${{ "%.2f"|format(total) }}</td>
+              <td class="num report-amount" data-label="Total">
+                <span class="report-amount-value">${{ "%.2f"|format(total) }}</span>
+                <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -99,7 +110,10 @@
             <tr>
               <td data-label="Bucket">{{ bucket_name }}</td>
               <td data-label="Transactions">{{ count }}</td>
-              <td class="num" data-label="Total">${{ "%.2f"|format(total) }}</td>
+              <td class="num report-amount" data-label="Total">
+                <span class="report-amount-value">${{ "%.2f"|format(total) }}</span>
+                <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -107,15 +121,47 @@
           <tr>
             <th data-label="Summary">Excluded total</th>
             <th data-label="Transactions"></th>
-            <th class="num" data-label="Total">${{ "%.2f"|format(excluded_total) }}</th>
+            <th class="num report-amount" data-label="Total">
+              <span class="report-amount-value">${{ "%.2f"|format(excluded_total) }}</span>
+              <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+            </th>
           </tr>
         </tfoot>
       </table>
     </div>
   </section>
 {% endif %}
+</div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
 <script>
+  const reportPage = document.getElementById("report-page");
+  const hideAmountsToggle = document.getElementById("report-hide-amounts");
+  const hideAmountsStorageKey = "reportHideAmounts";
+  let hideAmounts = sessionStorage.getItem(hideAmountsStorageKey) === "1";
+  let reportChart = null;
+
+  function applyHideAmounts() {
+    if (reportPage) {
+      reportPage.classList.toggle("report-hide-amounts", hideAmounts);
+    }
+    if (hideAmountsToggle) {
+      hideAmountsToggle.checked = hideAmounts;
+    }
+    if (reportChart) {
+      reportChart.update();
+    }
+  }
+
+  if (hideAmountsToggle) {
+    hideAmountsToggle.addEventListener("change", () => {
+      hideAmounts = hideAmountsToggle.checked;
+      sessionStorage.setItem(hideAmountsStorageKey, hideAmounts ? "1" : "0");
+      applyHideAmounts();
+    });
+  }
+
+  applyHideAmounts();
+
   document.querySelectorAll(".report-row-link").forEach((row) => {
     row.addEventListener("click", () => {
       window.location = row.dataset.href;
@@ -166,7 +212,7 @@
       legendRoot.appendChild(item);
     });
 
-    const chart = new Chart(chartCanvas, {
+    reportChart = new Chart(chartCanvas, {
       type: "pie",
       data: {
         labels: chartSlices.map((slice) => slice.label),
@@ -190,6 +236,9 @@
                 const slice = chartSlices[context.dataIndex];
                 const value = slice?.value || 0;
                 const pct = formatPercent(value);
+                if (hideAmounts) {
+                  return `${slice?.label || context.label}: ${pct}%`;
+                }
                 return `${slice?.label || context.label}: $${value.toFixed(2)} (${pct}%)`;
               },
             },
@@ -201,7 +250,7 @@
     let resizeTimer;
     window.addEventListener("resize", () => {
       window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => chart.resize(), 150);
+      resizeTimer = window.setTimeout(() => reportChart.resize(), 150);
     });
   }
 </script>
