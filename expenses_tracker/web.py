@@ -607,6 +607,14 @@ def create_app(settings: Settings | None = None) -> Flask:
         grand_total = sum(row[2] for row in totals)
         transaction_count = sum(row[3] for row in totals)
         excluded_total = sum(row[1] for row in excluded_totals)
+        chart_slices = [
+            {
+                "label": bucket_name,
+                "value": round(total, 2),
+            }
+            for _bucket_id, bucket_name, total, _count in totals
+            if total > 0
+        ]
         holders = sorted(
             {
                 expense.card_holder
@@ -624,6 +632,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             holders=holders,
             grand_total=grand_total,
             transaction_count=transaction_count,
+            chart_slices=chart_slices,
             page="report",
         )
 

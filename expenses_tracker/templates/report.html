@@ -26,17 +26,27 @@
 </form>
 
 <section class="report-summary">
-  <p class="report-summary-label">
-    {% if person %}{{ person }} · {% endif %}{{ month }}
-  </p>
-  <p class="report-summary-total">${{ "%.2f"|format(grand_total) }}</p>
-  <p class="report-summary-meta">
-    {% if transaction_count %}
-      {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
-    {% else %}
-      No counted expenses{% if person %} for {{ person }}{% endif %}
-    {% endif %}
-  </p>
+  <div class="report-summary-main">
+    <p class="report-summary-label">
+      {% if person %}{{ person }} · {% endif %}{{ month }}
+    </p>
+    <p class="report-summary-total">${{ "%.2f"|format(grand_total) }}</p>
+    <p class="report-summary-meta">
+      {% if transaction_count %}
+        {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
+      {% else %}
+        No counted expenses{% if person %} for {{ person }}{% endif %}
+      {% endif %}
+    </p>
+  </div>
+  {% if chart_slices %}
+    <div class="report-summary-chart">
+      <div class="report-chart-visual">
+        <canvas id="report-bucket-chart" aria-label="Spending by bucket"></canvas>
+      </div>
+      <ul class="report-chart-legend" id="report-chart-legend"></ul>
+    </div>
+  {% endif %}
 </section>
 
 {% if totals %}
@@ -105,6 +115,7 @@
     </div>
   </section>
 {% endif %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
 <script>
   document.querySelectorAll(".report-row-link").forEach((row) => {
     row.addEventListener("click", () => {
@@ -117,5 +128,82 @@
       }
     });
   });
+
+  const chartCanvas = document.getElementById("report-bucket-chart");
+  const chartSlices = {{ chart_slices | tojson }};
+  if (chartCanvas && chartSlices.length && window.Chart) {
+    const palette = [
+      "#0f766e",
+      "#14b8a6",
+      "#0e7490",
+      "#0891b2",
+      "#6366f1",
+      "#8b5cf6",
+      "#ea580c",
+      "#f59e0b",
+      "#84cc16",
+      "#64748b",
+      "#be123c",
+      "#db2777",
+    ];
+    const grandTotal = chartSlices.reduce((sum, slice) => sum + slice.value, 0);
+    const formatPercent = (value) => (
+      grandTotal ? ((value / grandTotal) * 100).toFixed(1) : "0.0"
+    );
+    const legendRoot = document.getElementById("report-chart-legend");
+    chartSlices.forEach((slice, index) => {
+      const item = document.createElement("li");
+      item.className = "report-chart-legend-item";
+
+      const swatch = document.createElement("span");
+      swatch.className = "report-chart-legend-swatch";
+      swatch.style.backgroundColor = palette[index % palette.length];
+
+      const label = document.createElement("span");
+      label.className = "report-chart-legend-label";
+      label.textContent = `${slice.label} (${formatPercent(slice.value)}%)`;
+
+      item.append(swatch, label);
+      legendRoot.appendChild(item);
+    });
+
+    const chart = new Chart(chartCanvas, {
+      type: "pie",
+      data: {
+        labels: chartSlices.map((slice) => slice.label),
+        datasets: [{
+          data: chartSlices.map((slice) => slice.value),
+          backgroundColor: chartSlices.map((_, index) => palette[index % palette.length]),
+          borderColor: "#fffdf9",
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            display: false,
+          },
+          tooltip: {
+            callbacks: {
+              label(context) {
+                const slice = chartSlices[context.dataIndex];
+                const value = slice?.value || 0;
+                const pct = formatPercent(value);
+                return `${slice?.label || context.label}: $${value.toFixed(2)} (${pct}%)`;
+              },
+            },
+          },
+        },
+      },
+    });
+
+    let resizeTimer;
+    window.addEventListener("resize", () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => chart.resize(), 150);
+    });
+  }
 </script>
 {% endblock %}
