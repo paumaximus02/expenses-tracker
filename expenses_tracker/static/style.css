@@ -477,6 +477,43 @@ body {
   margin-top: 0.75rem;
 }
 
+.rule-confirm-panel {
+  max-width: 40rem;
+}
+
+.rule-confirm-lead {
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+
+.rule-confirm-box {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--warn-bg);
+  margin-bottom: 1rem;
+}
+
+.rule-confirm-box h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.rule-confirm-box p {
+  margin: 0.35rem 0;
+}
+
+.rule-confirm-hint {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.rule-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .expense-top,
 .meta {
   display: flex;

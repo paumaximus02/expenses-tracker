@@ -15,7 +15,7 @@ from expenses_tracker.auth import (
     verify_password,
 )
 from expenses_tracker.background_sync import sync_status_payload, try_start_background_sync
-from expenses_tracker.bucket_matcher import analyze_merchants
+from expenses_tracker.bucket_matcher import BucketMatcher, analyze_merchants
 from expenses_tracker.buckets import (
     build_bucket_tree,
     flatten_bucket_select_options,
@@ -42,6 +42,23 @@ def _safe_next_url(raw: str) -> str:
     if raw and raw.startswith("/") and not raw.startswith("//"):
         return raw
     return url_for("review")
+
+
+def _expense_filter_redirect_kwargs(form) -> dict[str, str | int]:
+    kwargs: dict[str, str | int] = {
+        "month": form.get("month", date.today().strftime("%Y-%m")),
+        "q": form.get("q", "").strip(),
+        "status": form.get("status", "").strip(),
+    }
+    person = form.get("person", "").strip()
+    if person:
+        kwargs["person"] = person
+    filter_bucket_id = form.get("filter_bucket_id", "").strip()
+    if filter_bucket_id:
+        kwargs["bucket_id"] = filter_bucket_id
+    if form.get("unassigned") == "1":
+        kwargs["unassigned"] = 1
+    return kwargs
 
 
 PUBLIC_ENDPOINTS = frozenset({"login", "signup", "logout", "static"})
@@ -362,36 +379,64 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.post("/expenses/<int:expense_id>/update")
     def update_expense(expense_id: int):
         db, _ = _services()
-        month = request.form.get("month", date.today().strftime("%Y-%m"))
-        status_filter = request.form.get("status", "").strip()
-        search = request.form.get("q", "").strip()
-        person = request.form.get("person", "").strip()
-        unassigned = request.form.get("unassigned") == "1"
-        filter_bucket_id = request.form.get("filter_bucket_id", "").strip()
+        matcher = BucketMatcher(db)
+        redirect_kwargs = _expense_filter_redirect_kwargs(request.form)
         bucket_id_raw = request.form.get("bucket_id", "").strip()
         exclude_from_report = request.form.get("exclude_from_report") == "on"
+        confirm_rule_update = request.form.get("confirm_rule_update") == "1"
+        update_rule = request.form.get("update_rule") == "1"
         try:
+            expense = db.get_expense(expense_id)
+            if expense is None:
+                raise ValueError(f"Expense {expense_id} not found")
             bucket_id = int(bucket_id_raw) if bucket_id_raw else None
+            matched_rule = matcher.match(expense.merchant)
+            bucket_changed = bucket_id != expense.bucket_id
+            rule_conflict = (
+                bucket_changed
+                and bucket_id is not None
+                and matched_rule is not None
+                and matched_rule.bucket_id != bucket_id
+            )
+
+            if rule_conflict and not confirm_rule_update:
+                new_bucket = db.get_bucket(bucket_id)
+                if new_bucket is None:
+                    raise ValueError(f"Bucket {bucket_id} not found")
+                return render_template(
+                    "expense_rule_confirm.html",
+                    expense=expense,
+                    matched_rule=matched_rule,
+                    new_bucket=new_bucket,
+                    exclude_from_report=exclude_from_report,
+                    redirect_kwargs=redirect_kwargs,
+                    page="expenses",
+                )
+
             db.update_expense(
                 expense_id,
                 bucket_id=bucket_id,
                 exclude_from_report=exclude_from_report,
                 confirm=bucket_id is not None,
             )
-            flash("Expense updated.", "success")
+            if (
+                update_rule
+                and matched_rule is not None
+                and bucket_id is not None
+                and matched_rule.bucket_id != bucket_id
+            ):
+                db.upsert_merchant_rule(
+                    merchant_pattern=expense.merchant,
+                    bucket_id=bucket_id,
+                    match_type=matched_rule.match_type,
+                    confirmed_by_user=True,
+                )
+                flash("Expense updated and merchant rule changed.", "success")
+            else:
+                flash("Expense updated.", "success")
         except (ValueError, TypeError) as exc:
             flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "expenses_page",
-                month=month,
-                status=status_filter,
-                q=search,
-                person=person,
-                bucket_id=filter_bucket_id or None,
-                unassigned=1 if unassigned else None,
-            )
-        )
+        return redirect(url_for("expenses_page", **redirect_kwargs))
 
     @app.post("/expenses/<int:expense_id>/delete")
     def delete_expense(expense_id: int):

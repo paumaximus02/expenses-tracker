@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Update merchant rule? · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Update merchant rule?</h1>
+    <p class="subtitle">This expense has a saved rule that points to a different bucket.</p>
+  </div>
+</section>
+
+<section class="panel rule-confirm-panel">
+  <p class="rule-confirm-lead">
+    You changed <strong>{{ format_merchant(expense.merchant) }}</strong>
+    from <strong>{{ expense.bucket_name or "Unassigned" }}</strong>
+    to <strong>{{ new_bucket.display_path }}</strong>.
+  </p>
+
+  <div class="rule-confirm-box">
+    <h2>Existing rule</h2>
+    <p>
+      <strong>{{ format_merchant(matched_rule.merchant_pattern) }}</strong>
+      → {{ matched_rule.bucket_name }}
+      <span class="pill">{{ matched_rule.match_type.value }} match</span>
+    </p>
+    <p class="rule-confirm-hint">
+      Future syncs will keep assigning this merchant to
+      <strong>{{ matched_rule.bucket_name }}</strong> unless you update the rule.
+    </p>
+  </div>
+
+  <form method="post" action="{{ url_for('update_expense', expense_id=expense.id) }}" class="rule-confirm-form">
+    <input type="hidden" name="confirm_rule_update" value="1">
+    <input type="hidden" name="bucket_id" value="{{ new_bucket.id }}">
+    <input type="hidden" name="month" value="{{ redirect_kwargs.month }}">
+    <input type="hidden" name="status" value="{{ redirect_kwargs.status }}">
+    <input type="hidden" name="q" value="{{ redirect_kwargs.q }}">
+    {% if redirect_kwargs.get('person') %}
+      <input type="hidden" name="person" value="{{ redirect_kwargs.person }}">
+    {% endif %}
+    {% if redirect_kwargs.get('bucket_id') %}
+      <input type="hidden" name="filter_bucket_id" value="{{ redirect_kwargs.bucket_id }}">
+    {% endif %}
+    {% if redirect_kwargs.get('unassigned') %}
+      <input type="hidden" name="unassigned" value="1">
+    {% endif %}
+    {% if exclude_from_report %}
+      <input type="hidden" name="exclude_from_report" value="on">
+    {% endif %}
+
+    <div class="rule-confirm-actions">
+      <button type="submit" name="update_rule" value="1" class="btn btn-primary">
+        Update expense and rule
+      </button>
+      <button type="submit" name="update_rule" value="0" class="btn btn-secondary">
+        Update expense only
+      </button>
+      <a href="{{ url_for('expenses_page', **redirect_kwargs) }}" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}
