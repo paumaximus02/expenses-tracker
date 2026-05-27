@@ -1311,7 +1311,7 @@ class Database:
                 """
                 SELECT * FROM notifications
                 WHERE tenant_id = ?
-                ORDER BY created_at DESC, id DESC
+                ORDER BY datetime(created_at) DESC, id DESC
                 LIMIT ?
                 """,
                 (self._require_tenant(), limit),

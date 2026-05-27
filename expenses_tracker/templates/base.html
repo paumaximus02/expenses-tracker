@@ -47,7 +47,8 @@
         </form>
       {% endif %}
       <div class="notifications-menu"
-           data-mark-read-url="{{ url_for('mark_all_notifications_read') }}">
+           data-mark-read-url="{{ url_for('mark_all_notifications_read') }}"
+           data-notifications-url="{{ url_for('notifications_recent') }}">
         <button type="button"
                 class="notifications-button"
                 id="notifications-toggle"
@@ -65,7 +66,7 @@
             <a href="{{ url_for('notifications_page') }}">View all</a>
           </div>
           {% if recent_notifications %}
-            <ul class="notifications-dropdown-list">
+            <ul class="notifications-dropdown-list" id="notifications-dropdown-list">
               {% for notification in recent_notifications %}
                 <li class="notification-dropdown-item notification-{{ notification.level.value }}{% if not notification.is_read %} notification-unread{% endif %}">
                   <div class="notification-dropdown-title">{{ notification.title }}</div>
@@ -82,8 +83,9 @@
               {% endfor %}
             </ul>
           {% else %}
-            <p class="notifications-empty">No notifications yet.</p>
+            <ul class="notifications-dropdown-list" id="notifications-dropdown-list" hidden></ul>
           {% endif %}
+          <p class="notifications-empty" id="notifications-empty"{% if recent_notifications %} hidden{% endif %}>No notifications yet.</p>
         </div>
       </div>
       <form method="post" action="{{ url_for('sync_inbox') }}" class="sync-form" id="sync-form">

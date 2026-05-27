@@ -24,8 +24,8 @@ from expenses_tracker.buckets import (
 from expenses_tracker.config import Settings, get_settings
 from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
-from expenses_tracker.models import ExpenseStatus, MatchType
-from expenses_tracker.notifications import format_notification_time
+from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
+from expenses_tracker.notifications import format_notification_time, notification_to_dict
 from expenses_tracker.services import build_global_db, build_services
 from expenses_tracker.tenancy import resolve_tenant_id
 
@@ -291,6 +291,23 @@ def create_app(settings: Settings | None = None) -> Flask:
             "notifications.html",
             notifications=notifications,
             page="notifications",
+        )
+
+    @app.get("/notifications/recent")
+    def notifications_recent():
+        db, _ = _services()
+        notifications = db.list_notifications(limit=8)
+        items = []
+        for notification in notifications:
+            review_url = None
+            if notification.type == NotificationType.SYNC and notification.import_count:
+                review_url = url_for("review_sync", notification_id=notification.id)
+            items.append(notification_to_dict(notification, review_url=review_url))
+        return jsonify(
+            {
+                "notifications": items,
+                "unread_count": db.count_unread_notifications(),
+            }
         )
 
     @app.post("/notifications/mark-all-read")

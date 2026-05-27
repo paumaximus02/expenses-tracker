@@ -114,6 +114,78 @@
     }
   }
 
+  function escapeHtml(text) {
+    const element = document.createElement("div");
+    element.textContent = text;
+    return element.innerHTML;
+  }
+
+  function renderNotificationsDropdown(notifications) {
+    const list = document.getElementById("notifications-dropdown-list");
+    const empty = document.getElementById("notifications-empty");
+    if (!list) {
+      return;
+    }
+
+    if (!notifications.length) {
+      list.innerHTML = "";
+      list.hidden = true;
+      if (empty) {
+        empty.hidden = false;
+      }
+      return;
+    }
+
+    list.hidden = false;
+    if (empty) {
+      empty.hidden = true;
+    }
+
+    list.innerHTML = notifications
+      .map((notification) => {
+        const unreadClass = notification.is_read ? "" : " notification-unread";
+        const reviewLink =
+          notification.review_url && notification.import_count
+            ? `<a class="notification-action" href="${escapeHtml(notification.review_url)}">Review ${notification.import_count} new transaction${notification.import_count !== 1 ? "s" : ""}</a>`
+            : "";
+        return `<li class="notification-dropdown-item notification-${escapeHtml(notification.level)}${unreadClass}">
+          <div class="notification-dropdown-title">${escapeHtml(notification.title)}</div>
+          <div class="notification-dropdown-message">${escapeHtml(notification.message)}</div>
+          ${reviewLink}
+          <time class="local-datetime" datetime="${escapeHtml(notification.created_at)}"></time>
+        </li>`;
+      })
+      .join("");
+
+    formatLocalDateTimes();
+  }
+
+  function refreshNotificationsDropdown() {
+    const url = notificationsMenu && notificationsMenu.dataset.notificationsUrl;
+    if (!url) {
+      return Promise.resolve(null);
+    }
+
+    return fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "X-Requested-With": "fetch",
+      },
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Failed to fetch notifications.");
+        }
+        return response.json();
+      })
+      .then((data) => {
+        renderNotificationsDropdown(data.notifications || []);
+        updateNotificationsBadge(data.unread_count || 0);
+        return data;
+      })
+      .catch(() => null);
+  }
+
   function showSyncToast(message, reviewUrl) {
     let wrap = document.querySelector(".flash-wrap");
     if (!wrap) {
@@ -199,6 +271,7 @@
         setSyncButtonLoading(false);
         clearSyncBannerDismissed();
         hideSyncBanner();
+        refreshNotificationsDropdown();
         handleSyncFinished(data);
       })
       .catch(() => {});
@@ -300,13 +373,19 @@
   if (notificationsToggle && notificationsPanel && notificationsMenu) {
     notificationsToggle.addEventListener("click", (event) => {
       event.stopPropagation();
-      const isOpen = !notificationsPanel.hidden;
-      notificationsPanel.hidden = isOpen;
-      notificationsToggle.setAttribute("aria-expanded", String(!isOpen));
-
-      if (!notificationsPanel.hidden && notificationsBadge) {
-        markNotificationsRead();
+      if (!notificationsPanel.hidden) {
+        notificationsPanel.hidden = true;
+        notificationsToggle.setAttribute("aria-expanded", "false");
+        return;
       }
+
+      refreshNotificationsDropdown().then((data) => {
+        notificationsPanel.hidden = false;
+        notificationsToggle.setAttribute("aria-expanded", "true");
+        if (data && data.unread_count > 0) {
+          markNotificationsRead();
+        }
+      });
     });
 
     document.addEventListener("click", (event) => {
