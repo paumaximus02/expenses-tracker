@@ -63,6 +63,8 @@ def _expense_filter_redirect_kwargs(form) -> dict[str, str | int]:
 
 PUBLIC_ENDPOINTS = frozenset({"login", "signup", "logout", "static"})
 
+RULES_PER_PAGE = 25
+
 
 def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or get_settings()
@@ -628,8 +630,52 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.route("/rules")
     def rules():
         db, _ = _services()
-        rules_list = db.list_merchant_rules()
-        return render_template("rules.html", rules=rules_list, page="rules")
+        search = request.args.get("q", "").strip()
+        try:
+            current_page = max(1, int(request.args.get("page", "1")))
+        except ValueError:
+            current_page = 1
+        total_rules = db.count_merchant_rules(search=search or None)
+        total_pages = max(1, (total_rules + RULES_PER_PAGE - 1) // RULES_PER_PAGE)
+        current_page = min(current_page, total_pages)
+        offset = (current_page - 1) * RULES_PER_PAGE
+        rules_list = db.list_merchant_rules(
+            search=search or None,
+            limit=RULES_PER_PAGE,
+            offset=offset,
+        )
+        bucket_options = _bucket_options(db, assignable_only=True)
+        return render_template(
+            "rules.html",
+            rules=rules_list,
+            bucket_options=bucket_options,
+            search=search,
+            current_page=current_page,
+            total_pages=total_pages,
+            total_rules=total_rules,
+            rules_per_page=RULES_PER_PAGE,
+            page="rules",
+        )
+
+    @app.post("/rules/<int:rule_id>/update")
+    def update_rule(rule_id: int):
+        db, _ = _services()
+        search = request.form.get("q", "").strip()
+        page = request.form.get("page", "1").strip()
+        bucket_id_raw = request.form.get("bucket_id", "").strip()
+        try:
+            if not bucket_id_raw:
+                raise ValueError("Pick a bucket first.")
+            rule = db.update_merchant_rule_bucket(rule_id, int(bucket_id_raw))
+            flash(f"Updated rule for {format_merchant(rule.merchant_pattern)}.", "success")
+        except (ValueError, TypeError) as exc:
+            flash(str(exc), "error")
+        redirect_kwargs: dict[str, str | int] = {}
+        if search:
+            redirect_kwargs["q"] = search
+        if page.isdigit() and int(page) > 1:
+            redirect_kwargs["page"] = int(page)
+        return redirect(url_for("rules", **redirect_kwargs))
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings_page():

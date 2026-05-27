@@ -766,7 +766,13 @@ class Database:
             current = self.get_bucket(current.parent_id)
         return False
 
-    def list_merchant_rules(self) -> list[MerchantRule]:
+    def list_merchant_rules(
+        self,
+        *,
+        search: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[MerchantRule]:
         tenant_id = self._require_tenant()
         query = """
             SELECT r.id, r.merchant_pattern, r.bucket_id,
@@ -779,10 +785,24 @@ class Database:
             JOIN buckets b ON b.id = r.bucket_id AND b.tenant_id = r.tenant_id
             LEFT JOIN buckets p ON p.id = b.parent_id AND p.tenant_id = b.tenant_id
             WHERE r.tenant_id = ?
-            ORDER BY r.merchant_pattern COLLATE NOCASE ASC, r.match_type ASC
         """
+        params: list[object] = [tenant_id]
+        if search:
+            term = f"%{search.strip()}%"
+            query += """
+                AND (
+                    r.merchant_pattern LIKE ?
+                    OR b.name LIKE ?
+                    OR COALESCE(p.name, '') LIKE ?
+                )
+            """
+            params.extend([term, term, term])
+        query += " ORDER BY r.merchant_pattern COLLATE NOCASE ASC, r.match_type ASC"
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
         with self.connection() as conn:
-            rows = conn.execute(query, (tenant_id,)).fetchall()
+            rows = conn.execute(query, params).fetchall()
         return [
             MerchantRule(
                 id=row["id"],
@@ -795,6 +815,76 @@ class Database:
             )
             for row in rows
         ]
+
+    def count_merchant_rules(self, *, search: str | None = None) -> int:
+        tenant_id = self._require_tenant()
+        query = """
+            SELECT COUNT(*) AS count
+            FROM merchant_rules r
+            JOIN buckets b ON b.id = r.bucket_id AND b.tenant_id = r.tenant_id
+            LEFT JOIN buckets p ON p.id = b.parent_id AND p.tenant_id = b.tenant_id
+            WHERE r.tenant_id = ?
+        """
+        params: list[object] = [tenant_id]
+        if search:
+            term = f"%{search.strip()}%"
+            query += """
+                AND (
+                    r.merchant_pattern LIKE ?
+                    OR b.name LIKE ?
+                    OR COALESCE(p.name, '') LIKE ?
+                )
+            """
+            params.extend([term, term, term])
+        with self.connection() as conn:
+            row = conn.execute(query, params).fetchone()
+        return int(row["count"])
+
+    def get_merchant_rule(self, rule_id: int) -> MerchantRule | None:
+        tenant_id = self._require_tenant()
+        query = """
+            SELECT r.id, r.merchant_pattern, r.bucket_id,
+                   CASE
+                       WHEN p.name IS NOT NULL THEN p.name || ' › ' || b.name
+                       ELSE b.name
+                   END AS bucket_name,
+                   r.match_type, r.priority, r.confirmed_by_user
+            FROM merchant_rules r
+            JOIN buckets b ON b.id = r.bucket_id AND b.tenant_id = r.tenant_id
+            LEFT JOIN buckets p ON p.id = b.parent_id AND p.tenant_id = b.tenant_id
+            WHERE r.id = ? AND r.tenant_id = ?
+        """
+        with self.connection() as conn:
+            row = conn.execute(query, (rule_id, tenant_id)).fetchone()
+        if row is None:
+            return None
+        return MerchantRule(
+            id=row["id"],
+            merchant_pattern=row["merchant_pattern"],
+            bucket_id=row["bucket_id"],
+            bucket_name=row["bucket_name"],
+            match_type=MatchType(row["match_type"]),
+            priority=row["priority"],
+            confirmed_by_user=bool(row["confirmed_by_user"]),
+        )
+
+    def update_merchant_rule_bucket(self, rule_id: int, bucket_id: int) -> MerchantRule:
+        rule = self.get_merchant_rule(rule_id)
+        if rule is None:
+            raise ValueError(f"Rule {rule_id} not found.")
+        bucket = self.get_bucket(bucket_id)
+        if bucket is None:
+            raise ValueError(f"Bucket {bucket_id} not found.")
+        self.upsert_merchant_rule(
+            merchant_pattern=rule.merchant_pattern,
+            bucket_id=bucket_id,
+            match_type=rule.match_type,
+            confirmed_by_user=True,
+        )
+        updated = self.get_merchant_rule(rule_id)
+        if updated is None:
+            raise RuntimeError("Failed to load updated rule.")
+        return updated
 
     def upsert_merchant_rule(
         self,

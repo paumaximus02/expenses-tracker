@@ -8,6 +8,24 @@
   </div>
 </section>
 
+<form method="get" action="{{ url_for('rules') }}" class="filters" id="rules-filter-form">
+  <label class="field field-search">
+    <span>Search</span>
+    <input type="search" name="q" id="rules-search" value="{{ search }}" placeholder="Merchant or bucket">
+  </label>
+  <button type="submit" class="btn btn-secondary">Search</button>
+  {% if search %}
+    <a href="{{ url_for('rules') }}" class="btn btn-secondary">Clear</a>
+  {% endif %}
+</form>
+
+{% if total_rules %}
+  <p class="rules-summary">
+    Showing {{ rules|length }} of {{ total_rules }} rule{% if total_rules != 1 %}s{% endif %}
+    {% if search %} matching “{{ search }}”{% endif %}
+  </p>
+{% endif %}
+
 {% if rules %}
   <div class="report-table-wrap">
     <table class="report-table responsive-table">
@@ -17,6 +35,7 @@
           <th>Match</th>
           <th>Bucket</th>
           <th>Status</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -26,14 +45,46 @@
             <td data-label="Match">{{ rule.match_type.value }}</td>
             <td data-label="Bucket">{{ rule.bucket_name }}</td>
             <td data-label="Status">{% if rule.confirmed_by_user %}Confirmed{% else %}Auto{% endif %}</td>
+            <td data-label="Actions">
+              <details class="rule-edit">
+                <summary>Edit bucket</summary>
+                <form method="post" action="{{ url_for('update_rule', rule_id=rule.id) }}" class="inline-form">
+                  <input type="hidden" name="q" value="{{ search }}">
+                  <input type="hidden" name="page" value="{{ current_page }}">
+                  <label class="field">
+                    <span>Bucket</span>
+                    {% with selected_id=rule.bucket_id, required=true %}
+                      {% include "_bucket_select.html" %}
+                    {% endwith %}
+                  </label>
+                  <button type="submit" class="btn btn-secondary">Save</button>
+                </form>
+              </details>
+            </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
+  {% if total_pages > 1 %}
+    <nav class="pagination" aria-label="Rules pages">
+      {% if current_page > 1 %}
+        <a class="btn btn-secondary" href="{{ url_for('rules', q=search, page=current_page - 1) }}">Previous</a>
+      {% endif %}
+      <span class="pagination-status">Page {{ current_page }} of {{ total_pages }}</span>
+      {% if current_page < total_pages %}
+        <a class="btn btn-secondary" href="{{ url_for('rules', q=search, page=current_page + 1) }}">Next</a>
+      {% endif %}
+    </nav>
+  {% endif %}
 {% else %}
   <div class="empty-state">
-    <p>No rules yet. Confirm expenses with “Remember this merchant” to build them.</p>
+    {% if search %}
+      <p>No rules match “{{ search }}”.</p>
+    {% else %}
+      <p>No rules yet. Confirm expenses with “Remember this merchant” to build them.</p>
+    {% endif %}
   </div>
 {% endif %}
 {% endblock %}
