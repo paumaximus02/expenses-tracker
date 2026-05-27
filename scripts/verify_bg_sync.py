@@ -53,14 +53,6 @@ def main() -> None:
         db.set_sync_in_progress(False)
         print("In-progress guard OK")
 
-        with client.session_transaction() as session:
-            session["trigger_background_sync"] = True
-        response = client.get("/")
-        assert b'data-trigger-background-sync="1"' in response.data
-        response = client.get("/")
-        assert b'data-trigger-background-sync="1"' not in response.data
-        print("Login trigger flag one-shot OK")
-
         db.set_sync_value("last_sync_at", (datetime.now() - timedelta(hours=7)).isoformat())
         result = try_start_background_sync(settings, tenant_id, only_if_stale=False)
         if result.get("started"):

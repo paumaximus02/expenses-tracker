@@ -6,7 +6,6 @@
   const syncBannerDismiss = document.getElementById("sync-banner-dismiss");
   const syncStartUrl = body.dataset.syncStartUrl;
   const syncStatusUrl = body.dataset.syncStatusUrl;
-  const triggerBackgroundSync = body.dataset.triggerBackgroundSync === "1";
   const syncInProgressInitial = body.dataset.syncInProgress === "1";
   const notificationsToggle = document.getElementById("notifications-toggle");
   const notificationsPanel = document.getElementById("notifications-panel");
@@ -337,7 +336,7 @@
       showSyncBanner();
       setSyncButtonLoading(true);
       beginSyncPolling();
-    } else if (triggerBackgroundSync) {
+    } else {
       startBackgroundSync(true);
     }
   }

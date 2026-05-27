@@ -10,7 +10,6 @@
 <body{% if not hide_nav|default(false) %}
   data-sync-start-url="{{ url_for('sync_start') }}"
   data-sync-status-url="{{ url_for('sync_status') }}"
-  data-trigger-background-sync="{{ '1' if trigger_background_sync else '0' }}"
   data-sync-in-progress="{{ '1' if sync_in_progress else '0' }}"
 {% endif %}>
   {% if not hide_nav|default(false) %}

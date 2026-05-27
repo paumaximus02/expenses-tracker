@@ -103,7 +103,6 @@ def create_app(settings: Settings | None = None) -> Flask:
             "current_user": user,
             "auth_enabled": not settings.auth_disabled,
             "allow_signup": settings.allow_signup,
-            "trigger_background_sync": False,
             "recent_notifications": [],
             "notifications_unread_count": 0,
             "current_tenant": None,
@@ -117,7 +116,6 @@ def create_app(settings: Settings | None = None) -> Flask:
                     "recent_notifications": db.list_notifications(limit=8),
                     "notifications_unread_count": db.count_unread_notifications(),
                     "current_tenant": sync.tenant,
-                    "trigger_background_sync": session.pop("trigger_background_sync", False),
                     "sync_in_progress": db.is_sync_in_progress(),
                 }
             )
@@ -139,7 +137,6 @@ def create_app(settings: Settings | None = None) -> Flask:
                 flash("Invalid email or password.", "error")
             else:
                 login_user(credentials[0].id)
-                session["trigger_background_sync"] = True
                 flash(f"Welcome back, {credentials[0].email}.", "success")
                 return redirect(_safe_next_url(request.form.get("next") or request.args.get("next", "")))
         return render_template(
@@ -183,7 +180,6 @@ def create_app(settings: Settings | None = None) -> Flask:
                         tenant_id = tenant.id
                     user = auth_db.create_user(email, hash_password(password), tenant_id)
                     login_user(user.id)
-                    session["trigger_background_sync"] = True
                     flash("Account created.", "success")
                     return redirect(url_for("review"))
                 except ValueError as exc:
