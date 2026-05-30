@@ -45,6 +45,10 @@ class User:
     email: str
     tenant_id: int
     created_at: datetime
+    notify_email: bool = False
+    notify_sms: bool = False
+    phone: str | None = None
+    monthly_alert_threshold: float | None = None
 
 
 @dataclass

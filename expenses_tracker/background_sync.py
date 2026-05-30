@@ -4,31 +4,27 @@ import logging
 import threading
 
 from expenses_tracker.config import Settings, get_settings
+from expenses_tracker.scheduled_sync import run_scheduled_sync_for_tenant
 from expenses_tracker.services import build_global_db, build_services
 
 logger = logging.getLogger(__name__)
 
 
 def _run_sync_job(settings: Settings, tenant_id: int) -> None:
-    db, sync = build_services(settings, tenant_id=tenant_id)
-    global_db = build_global_db(settings)
+    db, _ = build_services(settings, tenant_id=tenant_id)
     try:
-        result = sync.sync()
-        payload = {
-            "imported": result.get("imported", 0),
-            "pending": result.get("pending", 0),
-            "skipped": result.get("skipped", 0),
-            "notification_id": result.get("notification_id"),
-            "error": None,
-        }
-        db.set_last_sync_result(payload)
-        try:
-            global_db.update_tenant_gmail_token(tenant_id, sync.gmail.export_token_json())
-        except RuntimeError:
-            pass
-    except Exception as exc:
-        logger.exception("Background sync failed for tenant %s", tenant_id)
-        db.set_last_sync_result({"imported": 0, "notification_id": None, "error": str(exc)})
+        result = run_scheduled_sync_for_tenant(
+            settings,
+            tenant_id,
+            only_if_stale=False,
+            manage_lock=False,
+        )
+        if not result.get("started"):
+            logger.info(
+                "Background sync not started for tenant %s: %s",
+                tenant_id,
+                result.get("reason"),
+            )
     finally:
         db.set_sync_in_progress(False)
 

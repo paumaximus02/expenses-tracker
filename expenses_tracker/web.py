@@ -21,11 +21,12 @@ from expenses_tracker.buckets import (
     flatten_bucket_select_options,
     resolve_suggested_bucket_id,
 )
-from expenses_tracker.config import Settings, get_settings
+from expenses_tracker.config import Settings, get_settings, resolve_gmail_credentials_path
 from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
 from expenses_tracker.notifications import format_notification_time, notification_to_dict
+from expenses_tracker.scheduled_sync import run_scheduled_sync_all
 from expenses_tracker.services import build_global_db, build_services
 from expenses_tracker.tenancy import resolve_tenant_id
 
@@ -61,7 +62,7 @@ def _expense_filter_redirect_kwargs(form) -> dict[str, str | int]:
     return kwargs
 
 
-PUBLIC_ENDPOINTS = frozenset({"login", "signup", "logout", "static"})
+PUBLIC_ENDPOINTS = frozenset({"login", "signup", "logout", "static", "health", "internal_sync_scheduled"})
 
 RULES_PER_PAGE = 25
 
@@ -121,6 +122,23 @@ def create_app(settings: Settings | None = None) -> Flask:
             )
 
         return helpers
+
+    @app.get("/health")
+    def health():
+        return jsonify({"status": "ok"})
+
+    @app.post("/internal/sync-scheduled")
+    def internal_sync_scheduled():
+        if not settings.cron_secret:
+            return jsonify({"error": "CRON_SECRET is not configured."}), 503
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.removeprefix("Bearer ").strip()
+        if token != settings.cron_secret:
+            secret_header = request.headers.get("X-Cron-Secret", "")
+            if secret_header != settings.cron_secret:
+                return jsonify({"error": "Unauthorized."}), 401
+        results = run_scheduled_sync_all(settings, only_if_stale=True)
+        return jsonify({"results": results})
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -686,6 +704,8 @@ def create_app(settings: Settings | None = None) -> Flask:
     def settings_page():
         db, sync = _services()
         tenant = sync.tenant
+        auth_db = build_global_db(settings)
+        user = None if settings.auth_disabled else current_user(auth_db)
         if request.method == "POST":
             from expenses_tracker.config import _parse_card_holders
 
@@ -714,15 +734,30 @@ def create_app(settings: Settings | None = None) -> Flask:
             tenant=tenant,
             card_holders_text=card_holders_text,
             gmail_connected=bool(tenant.gmail_token_json),
+            notify_email=user.notify_email if user is not None else False,
             page="settings",
         )
+
+    @app.route("/settings/notifications", methods=["POST"])
+    def settings_notifications():
+        if settings.auth_disabled:
+            flash("Notification preferences require login.", "error")
+            return redirect(url_for("settings_page"))
+        auth_db = build_global_db(settings)
+        user = current_user(auth_db)
+        if user is None:
+            return redirect(url_for("login", next=url_for("settings_page")))
+        notify_email = request.form.get("notify_email") == "1"
+        auth_db.update_user_notification_prefs(user.id, notify_email=notify_email)
+        flash("Notification preferences saved.", "success")
+        return redirect(url_for("settings_page"))
 
     @app.route("/settings/gmail/connect")
     def gmail_connect():
         _, sync = _services()
         tenant_id = sync.tenant.id
         redirect_uri = url_for("gmail_oauth_callback", _external=True)
-        flow = GmailClient.create_web_flow(settings.gmail_credentials_path, redirect_uri)
+        flow = GmailClient.create_web_flow(resolve_gmail_credentials_path(settings), redirect_uri)
         authorization_url, state = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
@@ -746,7 +781,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             return redirect(url_for("settings_page"))
         redirect_uri = url_for("gmail_oauth_callback", _external=True)
         flow = GmailClient.create_web_flow(
-            settings.gmail_credentials_path,
+            resolve_gmail_credentials_path(settings),
             redirect_uri,
             code_verifier=code_verifier,
         )

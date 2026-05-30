@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from expenses_tracker.background_sync import try_start_background_sync
-from expenses_tracker.config import Settings
+from expenses_tracker.config import NotifyEmailPolicy, Settings
 from expenses_tracker.services import build_services
 from expenses_tracker.web import create_app
 
@@ -12,6 +12,7 @@ from expenses_tracker.web import create_app
 def main() -> None:
     settings = Settings(
         gmail_credentials_path=Path("credentials.json"),
+        gmail_credentials_json=None,
         gmail_token_path=Path("token.json"),
         gmail_search_query="test",
         database_path=Path("data/expenses.db"),
@@ -21,6 +22,19 @@ def main() -> None:
         allow_signup=True,
         session_cookie_secure=False,
         sync_stale_hours=6,
+        sync_interval_seconds=3600,
+        notifications_enabled=True,
+        notify_email_enabled=False,
+        notify_email_debug=False,
+        notify_email_policy=NotifyEmailPolicy.ON_IMPORT,
+        app_base_url=None,
+        cron_secret=None,
+        smtp_host=None,
+        smtp_port=587,
+        smtp_user=None,
+        smtp_password=None,
+        smtp_from=None,
+        smtp_use_tls=True,
     )
     app = create_app(settings)
     client = app.test_client()

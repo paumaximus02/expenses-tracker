@@ -36,6 +36,25 @@
     </section>
 
     <section class="panel">
+      <h2>Notification preferences</h2>
+      {% if auth_enabled and current_user %}
+        <p class="settings-help">
+          In-app notifications in the bell icon are always shown after sync.
+          Enable email if you want a copy sent to <strong>{{ current_user.email }}</strong>.
+        </p>
+        <form method="post" action="{{ url_for('settings_notifications') }}" class="settings-form">
+          <label class="checkbox">
+            <input type="checkbox" name="notify_email" value="1" {% if notify_email %}checked{% endif %}>
+            <span>Email me about new transactions after sync</span>
+          </label>
+          <button type="submit" class="btn btn-primary">Save notification preferences</button>
+        </form>
+      {% else %}
+        <p class="settings-help">Sign in to manage your email notification preferences.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
       <h2>Gmail connection</h2>
       {% if gmail_connected %}
         <p class="settings-status settings-status-ok">Gmail is connected for this household.</p>

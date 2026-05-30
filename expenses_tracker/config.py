@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,9 +11,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class NotifyEmailPolicy(str, Enum):
+    NEVER = "never"
+    ON_IMPORT = "on_import"
+    ON_ERROR = "on_error"
+    ALWAYS = "always"
+
+
 @dataclass(frozen=True)
 class Settings:
     gmail_credentials_path: Path
+    gmail_credentials_json: str | None
     gmail_token_path: Path
     gmail_search_query: str
     database_path: Path
@@ -21,6 +31,19 @@ class Settings:
     allow_signup: bool
     session_cookie_secure: bool
     sync_stale_hours: int
+    sync_interval_seconds: int
+    notifications_enabled: bool
+    notify_email_enabled: bool
+    notify_email_debug: bool
+    notify_email_policy: NotifyEmailPolicy
+    app_base_url: str | None
+    cron_secret: str | None
+    smtp_host: str | None
+    smtp_port: int
+    smtp_user: str | None
+    smtp_password: str | None
+    smtp_from: str | None
+    smtp_use_tls: bool
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -44,9 +67,32 @@ def _parse_card_holders(raw: str) -> dict[str, str]:
     return holders
 
 
+def _parse_notify_email_policy(raw: str | None) -> NotifyEmailPolicy:
+    if raw is None:
+        return NotifyEmailPolicy.ON_IMPORT
+    cleaned = raw.strip().lower()
+    try:
+        return NotifyEmailPolicy(cleaned)
+    except ValueError:
+        return NotifyEmailPolicy.ON_IMPORT
+
+
+def resolve_gmail_credentials_path(settings: Settings) -> Path:
+    if settings.gmail_credentials_json:
+        path = settings.database_path.parent / ".gmail_credentials.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists() or path.read_text(encoding="utf-8") != settings.gmail_credentials_json:
+            json.loads(settings.gmail_credentials_json)
+            path.write_text(settings.gmail_credentials_json, encoding="utf-8")
+        return path
+    return settings.gmail_credentials_path
+
+
 def get_settings() -> Settings:
+    app_base_url = os.getenv("APP_BASE_URL", "").strip() or None
     return Settings(
         gmail_credentials_path=Path(os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")),
+        gmail_credentials_json=os.getenv("GMAIL_CREDENTIALS_JSON"),
         gmail_token_path=Path(os.getenv("GMAIL_TOKEN_PATH", "token.json")),
         gmail_search_query=os.getenv(
             "GMAIL_SEARCH_QUERY",
@@ -61,4 +107,17 @@ def get_settings() -> Settings:
         allow_signup=_env_bool("ALLOW_SIGNUP", True),
         session_cookie_secure=_env_bool("SESSION_COOKIE_SECURE", False),
         sync_stale_hours=int(os.getenv("SYNC_STALE_HOURS", "6")),
+        sync_interval_seconds=int(os.getenv("SYNC_INTERVAL_SECONDS", "3600")),
+        notifications_enabled=_env_bool("NOTIFICATIONS_ENABLED", True),
+        notify_email_enabled=_env_bool("NOTIFY_EMAIL_ENABLED", False),
+        notify_email_debug=_env_bool("NOTIFY_EMAIL_DEBUG", False),
+        notify_email_policy=_parse_notify_email_policy(os.getenv("NOTIFY_EMAIL_POLICY")),
+        app_base_url=app_base_url,
+        cron_secret=os.getenv("CRON_SECRET"),
+        smtp_host=os.getenv("SMTP_HOST") or None,
+        smtp_port=int(os.getenv("SMTP_PORT", "587")),
+        smtp_user=os.getenv("SMTP_USER") or None,
+        smtp_password=os.getenv("SMTP_PASSWORD") or None,
+        smtp_from=os.getenv("SMTP_FROM") or None,
+        smtp_use_tls=_env_bool("SMTP_USE_TLS", True),
     )

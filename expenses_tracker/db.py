@@ -142,6 +142,7 @@ class Database:
             """
         )
         self._migrate_users_tenant(conn)
+        self._migrate_user_notification_prefs(conn)
         for table in ("notifications",):
             if conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
@@ -393,6 +394,25 @@ class Database:
         if "tenant_id" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN tenant_id INTEGER REFERENCES tenants(id)")
             conn.execute("UPDATE users SET tenant_id = 1 WHERE tenant_id IS NULL")
+
+    def _migrate_user_notification_prefs(self, conn: sqlite3.Connection) -> None:
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone():
+            return
+        user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+        if "notify_email" not in user_columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 0"
+            )
+        if "notify_sms" not in user_columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN notify_sms INTEGER NOT NULL DEFAULT 0"
+            )
+        if "phone" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+        if "monthly_alert_threshold" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN monthly_alert_threshold REAL")
 
     def _ensure_tenant_unique_indexes(self, conn: sqlite3.Connection) -> None:
         if conn.execute(
@@ -1589,6 +1609,19 @@ class Database:
             return None
         return self._row_to_tenant(row)
 
+    def list_tenants_with_gmail(self) -> list[Tenant]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, name, invite_code, card_holders, gmail_search_query,
+                       gmail_token_json, created_at
+                FROM tenants
+                WHERE gmail_token_json IS NOT NULL AND TRIM(gmail_token_json) != ''
+                ORDER BY id
+                """
+            ).fetchall()
+        return [self._row_to_tenant(row) for row in rows]
+
     def get_default_tenant_id(self) -> int:
         with self.connection() as conn:
             row = conn.execute("SELECT id FROM tenants ORDER BY id LIMIT 1").fetchone()
@@ -1692,7 +1725,7 @@ class Database:
             return None
         with self.connection() as conn:
             row = conn.execute(
-                "SELECT id, email, tenant_id, created_at FROM users WHERE email = ?",
+                self._user_select_sql() + " WHERE email = ?",
                 (normalized_email,),
             ).fetchone()
         if row is None:
@@ -1702,12 +1735,64 @@ class Database:
     def get_user_by_id(self, user_id: int) -> User | None:
         with self.connection() as conn:
             row = conn.execute(
-                "SELECT id, email, tenant_id, created_at FROM users WHERE id = ?",
+                self._user_select_sql() + " WHERE id = ?",
                 (user_id,),
             ).fetchone()
         if row is None:
             return None
         return self._row_to_user(row)
+
+    def list_users_by_tenant(self, tenant_id: int) -> list[User]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                self._user_select_sql() + " WHERE tenant_id = ? ORDER BY email",
+                (tenant_id,),
+            ).fetchall()
+        return [self._row_to_user(row) for row in rows]
+
+    def update_user_notification_prefs(
+        self,
+        user_id: int,
+        *,
+        notify_email: bool | None = None,
+        notify_sms: bool | None = None,
+        phone: str | None = None,
+        monthly_alert_threshold: float | None = None,
+        clear_monthly_alert_threshold: bool = False,
+    ) -> User:
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise ValueError(f"User {user_id} not found.")
+
+        next_notify_email = user.notify_email if notify_email is None else notify_email
+        next_notify_sms = user.notify_sms if notify_sms is None else notify_sms
+        next_phone = user.phone if phone is None else phone.strip() or None
+        if clear_monthly_alert_threshold:
+            next_threshold = None
+        elif monthly_alert_threshold is None:
+            next_threshold = user.monthly_alert_threshold
+        else:
+            next_threshold = monthly_alert_threshold
+
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET notify_email = ?, notify_sms = ?, phone = ?, monthly_alert_threshold = ?
+                WHERE id = ?
+                """,
+                (
+                    int(next_notify_email),
+                    int(next_notify_sms),
+                    next_phone,
+                    next_threshold,
+                    user_id,
+                ),
+            )
+        updated = self.get_user_by_id(user_id)
+        if updated is None:
+            raise RuntimeError("Failed to update user notification preferences.")
+        return updated
 
     def get_user_password_hash(self, email: str) -> tuple[User, str] | None:
         normalized_email = email.strip().lower()
@@ -1715,10 +1800,7 @@ class Database:
             return None
         with self.connection() as conn:
             row = conn.execute(
-                """
-                SELECT id, email, tenant_id, password_hash, created_at
-                FROM users WHERE email = ?
-                """,
+                self._user_select_sql(include_password=True) + " WHERE email = ?",
                 (normalized_email,),
             ).fetchone()
         if row is None:
@@ -1726,11 +1808,35 @@ class Database:
         user = self._row_to_user(row)
         return user, row["password_hash"]
 
+    def _user_select_sql(self, *, include_password: bool = False) -> str:
+        columns = [
+            "id",
+            "email",
+            "tenant_id",
+            "created_at",
+            "notify_email",
+            "notify_sms",
+            "phone",
+            "monthly_alert_threshold",
+        ]
+        if include_password:
+            columns.insert(3, "password_hash")
+        return "SELECT " + ", ".join(columns) + " FROM users"
+
     def _row_to_user(self, row: sqlite3.Row) -> User:
         tenant_id = row["tenant_id"] if "tenant_id" in row.keys() else 1
+        keys = row.keys()
         return User(
             id=row["id"],
             email=row["email"],
             tenant_id=int(tenant_id),
             created_at=self._parse_db_datetime(row["created_at"]),
+            notify_email=bool(row["notify_email"]) if "notify_email" in keys else False,
+            notify_sms=bool(row["notify_sms"]) if "notify_sms" in keys else False,
+            phone=row["phone"] if "phone" in keys else None,
+            monthly_alert_threshold=(
+                float(row["monthly_alert_threshold"])
+                if "monthly_alert_threshold" in keys and row["monthly_alert_threshold"] is not None
+                else None
+            ),
         )

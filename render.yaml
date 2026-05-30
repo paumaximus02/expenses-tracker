@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: expenses-tracker
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 wsgi:app
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_PATH
+        value: /data/expenses.db
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - fromGroup: expenses-tracker-env
+    disk:
+      name: expenses-data
+      mountPath: /data
+      sizeGB: 1
+
+  - type: cron
+    name: expenses-tracker-sync
+    runtime: python
+    schedule: "0 */6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      curl -fsS -X POST
+      -H "Authorization: Bearer $CRON_SECRET"
+      "$APP_BASE_URL/internal/sync-scheduled"
+    envVars:
+      - fromGroup: expenses-tracker-env

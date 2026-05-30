@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from expenses_tracker.bucket_matcher import BucketMatcher, normalize_merchant
 from expenses_tracker.config import Settings
 from expenses_tracker.db import Database
+from expenses_tracker.delivery.dispatcher import NotificationDispatcher
 from expenses_tracker.email_parser import parse_gmail_message
 from expenses_tracker.gmail_client import GmailClient
-from expenses_tracker.models import ExpenseStatus, MatchType, NotificationLevel, NotificationType, Tenant
-from expenses_tracker.notifications import format_sync_error, format_sync_result
+from expenses_tracker.models import ExpenseStatus, MatchType, Tenant
+from expenses_tracker.tenancy import global_db
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ExpenseSyncService:
     def sync(self, *, record_notification: bool = True) -> dict[str, int]:
         if not self.gmail.has_token():
             raise RuntimeError("Gmail is not connected for this household. Connect Gmail in Settings.")
+        synced_at = datetime.now(timezone.utc)
         try:
             self.gmail.authenticate()
             messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
@@ -92,7 +94,7 @@ class ExpenseSyncService:
                 imported_ids.append(expense_id)
                 imported += 1
 
-            self.db.set_sync_value("last_sync_at", datetime.now(timezone.utc).isoformat())
+            self.db.set_sync_value("last_sync_at", synced_at.isoformat())
             result = {
                 "messages_checked": len(messages),
                 "imported": imported,
@@ -101,27 +103,40 @@ class ExpenseSyncService:
                 "skipped": skipped,
                 "notification_id": None,
             }
+            imported_expenses = [self.db.get_expense(expense_id) for expense_id in imported_ids]
+            imported_expenses = [expense for expense in imported_expenses if expense is not None]
+
             if record_notification:
-                title, message = format_sync_result(result)
-                notification = self.db.create_notification(
-                    type=NotificationType.SYNC,
-                    title=title,
-                    message=message,
-                    level=NotificationLevel.SUCCESS,
+                auth_db = global_db(self.settings)
+                dispatcher = NotificationDispatcher(self.settings, self.db, auth_db=auth_db)
+                event = dispatcher.dispatch_sync_completed(
+                    tenant=self.tenant,
+                    result=result,
+                    imported_expense_ids=imported_ids,
+                    imported_expenses=imported_expenses,
+                    synced_at=synced_at,
                 )
-                result["notification_id"] = notification.id
-                if imported_ids:
-                    self.db.link_expenses_to_sync_notification(imported_ids, notification.id)
+                result["notification_id"] = event.notification_id
             return result
         except Exception as exc:
             if record_notification:
-                title, message = format_sync_error(exc)
-                self.db.create_notification(
-                    type=NotificationType.SYNC,
-                    title=title,
-                    message=message,
-                    level=NotificationLevel.ERROR,
+                auth_db = global_db(self.settings)
+                dispatcher = NotificationDispatcher(self.settings, self.db, auth_db=auth_db)
+                event = dispatcher.dispatch_sync_completed(
+                    tenant=self.tenant,
+                    result={
+                        "messages_checked": 0,
+                        "imported": 0,
+                        "auto_assigned": 0,
+                        "pending": 0,
+                        "skipped": 0,
+                    },
+                    imported_expense_ids=[],
+                    imported_expenses=[],
+                    synced_at=synced_at,
+                    error=str(exc),
                 )
+                logger.info("Recorded sync failure notification %s", event.notification_id)
             raise
 
     def repair_card_holders(self) -> dict[str, int]:

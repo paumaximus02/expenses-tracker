@@ -10,7 +10,7 @@ import click
 from expenses_tracker.auth import hash_password, validate_password
 
 from expenses_tracker.bucket_matcher import analyze_merchants
-from expenses_tracker.config import get_settings
+from expenses_tracker.config import get_settings, resolve_gmail_credentials_path
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType
 from expenses_tracker.services import build_global_db, build_services
@@ -85,11 +85,80 @@ def create_user_command(email: str, tenant_id: int) -> None:
 def auth_command(tenant_id: int) -> None:
     """Run Gmail OAuth and store the token for a household."""
     settings = get_settings()
-    gmail = GmailClient(settings.gmail_credentials_path, settings.gmail_token_path)
+    gmail = GmailClient(resolve_gmail_credentials_path(settings), settings.gmail_token_path)
     gmail.authenticate()
     auth_db = build_global_db()
     auth_db.update_tenant_gmail_token(tenant_id, gmail.export_token_json())
     click.echo(f"Authenticated tenant {tenant_id}. Token saved in the database.")
+
+
+@cli.command("sync-scheduled")
+@click.option(
+    "--all-tenants/--tenant",
+    "all_tenants",
+    default=True,
+    show_default=True,
+    help="Sync all Gmail-connected households or one tenant.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Run even if the last sync is still fresh.",
+)
+@_tenant_option()
+def sync_scheduled_command(tenant_id: int, all_tenants: bool, force: bool) -> None:
+    """Run scheduled Gmail sync (for cron/Task Scheduler or local testing)."""
+    from expenses_tracker.scheduled_sync import run_scheduled_sync_all, run_scheduled_sync_for_tenant
+
+    settings = get_settings()
+    only_if_stale = not force
+    if all_tenants:
+        results = run_scheduled_sync_all(settings, only_if_stale=only_if_stale)
+        if not results:
+            click.echo("No Gmail-connected households found.")
+            return
+        for result in results:
+            _echo_scheduled_result(result)
+        return
+
+    result = run_scheduled_sync_for_tenant(settings, tenant_id, only_if_stale=only_if_stale)
+    _echo_scheduled_result(result)
+
+
+def _echo_scheduled_result(result: dict[str, object]) -> None:
+    tenant_id = result.get("tenant_id", "?")
+    if not result.get("started"):
+        click.echo(f"Tenant {tenant_id}: skipped ({result.get('reason', 'unknown')}).")
+        return
+    if result.get("error"):
+        click.echo(f"Tenant {tenant_id}: failed — {result['error']}")
+        return
+    click.echo(
+        f"Tenant {tenant_id}: imported {result.get('imported', 0)}, "
+        f"pending {result.get('pending', 0)}, skipped {result.get('skipped', 0)}."
+    )
+
+
+@cli.command("worker")
+@click.option(
+    "--interval",
+    default=lambda: get_settings().sync_interval_seconds,
+    show_default="SYNC_INTERVAL_SECONDS",
+    help="Seconds between scheduled sync runs.",
+)
+def worker_command(interval: int) -> None:
+    """Run scheduled sync in a loop (optional alternative to OS cron)."""
+    import time
+
+    from expenses_tracker.scheduled_sync import run_scheduled_sync_all
+
+    settings = get_settings()
+    click.echo(f"Worker started; syncing every {interval} seconds. Press Ctrl+C to stop.")
+    while True:
+        results = run_scheduled_sync_all(settings, only_if_stale=True)
+        for result in results:
+            _echo_scheduled_result(result)
+        time.sleep(interval)
 
 
 @cli.command("sync")
