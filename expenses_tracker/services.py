@@ -3,7 +3,12 @@ from __future__ import annotations
 import logging
 
 from expenses_tracker.bucket_matcher import BucketMatcher
-from expenses_tracker.config import Settings, get_settings, resolve_gmail_credentials_path
+from expenses_tracker.config import (
+    Settings,
+    get_settings,
+    resolve_gmail_credentials_path,
+    resolve_gmail_token_json,
+)
 from expenses_tracker.db import Database
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import Tenant
@@ -24,7 +29,7 @@ def build_services(
     gmail = GmailClient(
         resolve_gmail_credentials_path(settings),
         token_path=settings.gmail_token_path,
-        token_json=tenant.gmail_token_json,
+        token_json=resolve_gmail_token_json(settings, tenant.gmail_token_json),
     )
     matcher = BucketMatcher(db)
     sync = ExpenseSyncService(settings, db, gmail, matcher, tenant=tenant)

@@ -52,7 +52,12 @@ class GmailClient:
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
-            elif self.token_path:
+            elif self.token_json is not None:
+                raise RuntimeError(
+                    "Gmail token is invalid or expired and could not be refreshed. "
+                    "Reconnect Gmail in Settings."
+                )
+            elif self.token_path and self.token_path.exists():
                 if not self.credentials_path.exists():
                     raise FileNotFoundError(
                         f"Missing {self.credentials_path}. Download OAuth credentials from "

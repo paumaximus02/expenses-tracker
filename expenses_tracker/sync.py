@@ -140,6 +140,8 @@ class ExpenseSyncService:
             raise
 
     def repair_card_holders(self) -> dict[str, int]:
+        if not self.gmail.has_token():
+            raise RuntimeError("Gmail is not connected for this household. Connect Gmail in Settings.")
         self.gmail.authenticate()
         messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
         messages_by_id = {message["id"]: message for message in messages}
@@ -181,6 +183,8 @@ class ExpenseSyncService:
         }
 
     def repair_transaction_dates(self) -> dict[str, int]:
+        if not self.gmail.has_token():
+            raise RuntimeError("Gmail is not connected for this household. Connect Gmail in Settings.")
         self.gmail.authenticate()
         messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
         messages_by_id = {message["id"]: message for message in messages}

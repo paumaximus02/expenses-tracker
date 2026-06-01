@@ -23,6 +23,7 @@ class Settings:
     gmail_credentials_path: Path
     gmail_credentials_json: str | None
     gmail_token_path: Path
+    gmail_token_json: str | None
     gmail_search_query: str
     database_path: Path
     card_holders: dict[str, str]
@@ -78,6 +79,16 @@ def _parse_notify_email_policy(raw: str | None) -> NotifyEmailPolicy:
         return NotifyEmailPolicy.ON_IMPORT
 
 
+def resolve_gmail_token_json(settings: Settings, tenant_token_json: str | None) -> str | None:
+    if tenant_token_json and tenant_token_json.strip():
+        return tenant_token_json
+    if settings.gmail_token_json:
+        return settings.gmail_token_json
+    if settings.gmail_token_path.exists():
+        return settings.gmail_token_path.read_text(encoding="utf-8")
+    return None
+
+
 def resolve_gmail_credentials_path(settings: Settings) -> Path:
     if settings.gmail_credentials_json:
         path = settings.database_path.parent / ".gmail_credentials.json"
@@ -95,6 +106,7 @@ def get_settings() -> Settings:
         gmail_credentials_path=Path(os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")),
         gmail_credentials_json=os.getenv("GMAIL_CREDENTIALS_JSON"),
         gmail_token_path=Path(os.getenv("GMAIL_TOKEN_PATH", "token.json")),
+        gmail_token_json=os.getenv("GMAIL_TOKEN_JSON"),
         gmail_search_query=os.getenv(
             "GMAIL_SEARCH_QUERY",
             'from:(citibank.com OR citi.com) after:2026/04/01 subject:transaction',

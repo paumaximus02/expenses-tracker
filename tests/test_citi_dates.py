@@ -18,6 +18,7 @@ def _settings() -> Settings:
         gmail_credentials_path=Path("credentials.json"),
         gmail_credentials_json=None,
         gmail_token_path=Path("token.json"),
+        gmail_token_json=None,
         gmail_search_query="test",
         database_path=Path("data/expenses.db"),
         card_holders={"4149": "Juan"},
