@@ -37,6 +37,7 @@ class Settings:
     notify_email_debug: bool
     notify_email_policy: NotifyEmailPolicy
     app_base_url: str | None
+    app_timezone: str
     cron_secret: str | None
     smtp_host: str | None
     smtp_port: int
@@ -113,6 +114,7 @@ def get_settings() -> Settings:
         notify_email_debug=_env_bool("NOTIFY_EMAIL_DEBUG", False),
         notify_email_policy=_parse_notify_email_policy(os.getenv("NOTIFY_EMAIL_POLICY")),
         app_base_url=app_base_url,
+        app_timezone=os.getenv("APP_TIMEZONE", "America/New_York"),
         cron_secret=os.getenv("CRON_SECRET"),
         smtp_host=os.getenv("SMTP_HOST") or None,
         smtp_port=int(os.getenv("SMTP_PORT", "587")),

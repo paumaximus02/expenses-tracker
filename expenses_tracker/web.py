@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
@@ -22,6 +21,7 @@ from expenses_tracker.buckets import (
     resolve_suggested_bucket_id,
 )
 from expenses_tracker.config import Settings, get_settings, resolve_gmail_credentials_path
+from expenses_tracker.dates import app_month
 from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
@@ -47,7 +47,7 @@ def _safe_next_url(raw: str) -> str:
 
 def _expense_filter_redirect_kwargs(form) -> dict[str, str | int]:
     kwargs: dict[str, str | int] = {
-        "month": form.get("month", date.today().strftime("%Y-%m")),
+        "month": form.get("month", app_month()),
         "q": form.get("q", "").strip(),
         "status": form.get("status", "").strip(),
     }
@@ -355,7 +355,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.route("/expenses")
     def expenses_page():
         db, _ = _services()
-        month = request.args.get("month", date.today().strftime("%Y-%m"))
+        month = request.args.get("month", app_month(settings))
         status_filter = request.args.get("status", "").strip()
         search = request.args.get("q", "").strip()
         person = request.args.get("person", "").strip()
@@ -457,7 +457,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.post("/expenses/<int:expense_id>/delete")
     def delete_expense(expense_id: int):
         db, _ = _services()
-        month = request.form.get("month", date.today().strftime("%Y-%m"))
+        month = request.form.get("month", app_month(settings))
         status_filter = request.form.get("status", "").strip()
         search = request.form.get("q", "").strip()
         person = request.form.get("person", "").strip()
@@ -614,7 +614,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.route("/report")
     def report():
         db, _ = _services()
-        month = request.args.get("month", date.today().strftime("%Y-%m"))
+        month = request.args.get("month", app_month(settings))
         person = request.args.get("person") or None
         totals = db.monthly_totals(month, card_holder=person)
         excluded_totals = db.monthly_excluded_totals(month, card_holder=person)

@@ -11,6 +11,7 @@ from expenses_tracker.auth import hash_password, validate_password
 
 from expenses_tracker.bucket_matcher import analyze_merchants
 from expenses_tracker.config import get_settings, resolve_gmail_credentials_path
+from expenses_tracker.dates import app_month
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType
 from expenses_tracker.services import build_global_db, build_services
@@ -177,6 +178,20 @@ def sync_command(tenant_id: int) -> None:
     )
 
 
+@cli.command("repair-dates")
+@_tenant_option()
+def repair_dates_command(tenant_id: int) -> None:
+    """Re-parse Gmail messages and fix transaction dates."""
+    _, sync = _build_services(tenant_id)
+    result = sync.repair_transaction_dates()
+    click.echo(
+        "Date repair complete: "
+        f"{result['updated']} updated, "
+        f"{result['unchanged']} unchanged, "
+        f"{result['missing']} missing/unparseable."
+    )
+
+
 @cli.command("repair-cards")
 @_tenant_option()
 def repair_cards_command(tenant_id: int) -> None:
@@ -299,7 +314,7 @@ def rules_command(tenant_id: int) -> None:
 
 
 @cli.command("report")
-@click.option("--month", default=lambda: date.today().strftime("%Y-%m"), show_default="current month")
+@click.option("--month", default=lambda: app_month(), show_default="current month")
 @click.option("--person", default=None, help="Filter by card holder, e.g. Juan or Debora.")
 @_tenant_option()
 def report_command(month: str, person: str | None, tenant_id: int) -> None:

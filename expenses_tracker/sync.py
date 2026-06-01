@@ -180,6 +180,40 @@ class ExpenseSyncService:
             "missing": missing,
         }
 
+    def repair_transaction_dates(self) -> dict[str, int]:
+        self.gmail.authenticate()
+        messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
+        messages_by_id = {message["id"]: message for message in messages}
+
+        updated = 0
+        unchanged = 0
+        missing = 0
+
+        for expense in self.db.list_expenses():
+            message = messages_by_id.get(expense.gmail_message_id)
+            if message is None:
+                missing += 1
+                continue
+
+            parsed = parse_gmail_message(message, card_holders=self.tenant.card_holders)
+            if parsed is None:
+                missing += 1
+                continue
+
+            if parsed.transaction_date == expense.transaction_date:
+                unchanged += 1
+                continue
+
+            self.db.update_expense_date(expense.id, parsed.transaction_date)
+            updated += 1
+
+        return {
+            "messages_checked": len(messages),
+            "updated": updated,
+            "unchanged": unchanged,
+            "missing": missing,
+        }
+
     def confirm_expense(self, expense_id: int, bucket_name: str, create_rule: bool = True) -> None:
         bucket = self.db.resolve_bucket_reference(bucket_name)
 

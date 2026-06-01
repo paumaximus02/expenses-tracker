@@ -1244,6 +1244,18 @@ class Database:
             )
         return self.get_expense(expense_id)
 
+    def update_expense_date(self, expense_id: int, transaction_date: date) -> Expense | None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE expenses
+                SET transaction_date = ?
+                WHERE id = ? AND tenant_id = ?
+                """,
+                (transaction_date.isoformat(), expense_id, self._require_tenant()),
+            )
+        return self.get_expense(expense_id)
+
     def distinct_merchants(self, *, pending_only: bool = False) -> list[str]:
         tenant_id = self._require_tenant()
         query = "SELECT DISTINCT merchant FROM expenses WHERE tenant_id = ?"

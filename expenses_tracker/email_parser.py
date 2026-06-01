@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import base64
 import re
-from datetime import date, datetime
-from email.utils import parsedate_to_datetime
+from datetime import date
+
+from expenses_tracker.dates import resolve_transaction_date
 
 from expenses_tracker.citi_parser import is_citi_alert, parse_citi_message
 from expenses_tracker.models import ParsedEmail
@@ -20,10 +21,16 @@ MERCHANT_PATTERNS = [
     re.compile(r"^(.+?)\s+(?:purchase|transaction|charge)", re.I),
 ]
 
-DATE_PATTERNS = [
-    re.compile(r"(?:on|date)\s*[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", re.I),
-    re.compile(r"(\d{4}-\d{2}-\d{2})"),
-]
+def _parse_date(
+    text: str,
+    email_date_header: str | None,
+    gmail_internal_date_ms: str | int | None = None,
+) -> date:
+    return resolve_transaction_date(
+        text,
+        email_date_header=email_date_header,
+        gmail_internal_date_ms=gmail_internal_date_ms,
+    )
 
 
 def _decode_body(payload: dict) -> str:
@@ -72,24 +79,6 @@ def _parse_merchant(text: str, subject: str) -> str | None:
     return cleaned_subject or None
 
 
-def _parse_date(text: str, email_date_header: str | None) -> date:
-    for pattern in DATE_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            raw = match.group(1)
-            for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(raw, fmt).date()
-                except ValueError:
-                    continue
-    if email_date_header:
-        try:
-            return parsedate_to_datetime(email_date_header).date()
-        except (TypeError, ValueError, IndexError):
-            pass
-    return date.today()
-
-
 def _parse_generic_message(
     *,
     gmail_message_id: str,
@@ -97,6 +86,7 @@ def _parse_generic_message(
     sender: str,
     body_text: str,
     email_date_header: str | None,
+    gmail_internal_date_ms: str | int | None = None,
 ) -> ParsedEmail | None:
     combined = f"{subject}\n{body_text}"
     amount = _parse_amount(combined)
@@ -104,7 +94,7 @@ def _parse_generic_message(
     if amount is None or merchant is None:
         return None
 
-    transaction_date = _parse_date(combined, email_date_header)
+    transaction_date = _parse_date(combined, email_date_header, gmail_internal_date_ms)
     return ParsedEmail(
         gmail_message_id=gmail_message_id,
         transaction_date=transaction_date,
@@ -129,6 +119,7 @@ def parse_gmail_message(
     subject = headers.get("subject", "")
     sender = headers.get("from", "")
     body_text = _decode_body(message.get("payload", {}))
+    internal_date = message.get("internalDate")
 
     if is_citi_alert(sender, subject):
         return parse_citi_message(
@@ -137,6 +128,7 @@ def parse_gmail_message(
             sender=sender,
             body_text=body_text,
             email_date_header=headers.get("date"),
+            gmail_internal_date_ms=internal_date,
             card_holders=card_holders,
         )
 
@@ -146,4 +138,5 @@ def parse_gmail_message(
         sender=sender,
         body_text=body_text,
         email_date_header=headers.get("date"),
+        gmail_internal_date_ms=internal_date,
     )

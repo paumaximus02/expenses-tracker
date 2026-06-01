@@ -28,6 +28,7 @@ def main() -> None:
         notify_email_debug=False,
         notify_email_policy=NotifyEmailPolicy.ON_IMPORT,
         app_base_url=None,
+        app_timezone="America/New_York",
         cron_secret=None,
         smtp_host=None,
         smtp_port=587,
