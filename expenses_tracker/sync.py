@@ -96,6 +96,8 @@ class ExpenseSyncService:
                 imported += 1
 
             income_result = self.sync_income()
+            withdrawal_ids = income_result.pop("withdrawal_expense_ids", [])
+            imported_ids.extend(withdrawal_ids)
 
             self.db.set_sync_value("last_sync_at", synced_at.isoformat())
             result = {
@@ -143,12 +145,22 @@ class ExpenseSyncService:
                 logger.info("Recorded sync failure notification %s", event.notification_id)
             raise
 
-    def sync_income(self) -> dict[str, int]:
-        """Import income from emails matching the household's income rules."""
+    def sync_income(self) -> dict[str, object]:
+        """Import bank emails matching the household's income/withdrawal rules.
+
+        Deposit rules create income entries; withdrawal rules create expenses.
+        """
+        empty: dict[str, object] = {
+            "income_checked": 0,
+            "income_imported": 0,
+            "income_skipped": 0,
+            "withdrawals_imported": 0,
+            "withdrawal_expense_ids": [],
+        }
         query = (self.tenant.income_gmail_search_query or "").strip()
         rules = self.db.list_income_rules()
         if not query or not rules:
-            return {"income_checked": 0, "income_imported": 0, "income_skipped": 0}
+            return empty
 
         messages = self.gmail.fetch_messages(query)
         logger.info(
@@ -158,14 +170,37 @@ class ExpenseSyncService:
         )
         imported = 0
         skipped = 0
+        withdrawal_expense_ids: list[int] = []
         for message in messages:
-            if self.db.income_exists(message["id"]):
+            message_id = message["id"]
+            if self.db.income_exists(message_id) or self.db.expense_exists(message_id):
                 skipped += 1
                 continue
 
             parsed = parse_income_message(message, rules)
             if parsed is None:
                 skipped += 1
+                continue
+
+            if parsed.rule.direction == "withdrawal":
+                merchant = parsed.rule.source_name
+                bucket_id = parsed.rule.expense_bucket_id
+                expense_id = self.db.insert_expense(
+                    gmail_message_id=parsed.gmail_message_id,
+                    transaction_date=parsed.received_date,
+                    merchant=merchant,
+                    merchant_normalized=normalize_merchant(merchant),
+                    amount=parsed.amount,
+                    currency=parsed.currency,
+                    bucket_id=bucket_id,
+                    suggested_bucket_id=bucket_id,
+                    status=ExpenseStatus.AUTO if bucket_id else ExpenseStatus.PENDING,
+                    email_subject=parsed.email_subject,
+                    email_from=parsed.email_from,
+                    card_last_four=None,
+                    card_holder=parsed.rule.person,
+                )
+                withdrawal_expense_ids.append(expense_id)
                 continue
 
             self.db.insert_income(
@@ -186,6 +221,8 @@ class ExpenseSyncService:
             "income_checked": len(messages),
             "income_imported": imported,
             "income_skipped": skipped,
+            "withdrawals_imported": len(withdrawal_expense_ids),
+            "withdrawal_expense_ids": withdrawal_expense_ids,
         }
 
     def repair_card_holders(self) -> dict[str, int]:

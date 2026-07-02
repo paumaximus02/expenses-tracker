@@ -132,6 +132,11 @@ class IncomeRule:
     bucket_id: int | None
     bucket_name: str | None
     person: str | None
+    # "deposit" imports the email as income; "withdrawal" imports it as an
+    # expense assigned to expense_bucket_id.
+    direction: str = "deposit"
+    expense_bucket_id: int | None = None
+    expense_bucket_name: str | None = None
 
 
 @dataclass

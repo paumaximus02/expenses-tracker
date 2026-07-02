@@ -183,6 +183,14 @@ class Database:
             conn.execute(
                 "ALTER TABLE tenants ADD COLUMN income_gmail_search_query TEXT NOT NULL DEFAULT ''"
             )
+        rule_columns = {row[1] for row in conn.execute("PRAGMA table_info(income_rules)")}
+        if rule_columns and "direction" not in rule_columns:
+            conn.execute(
+                "ALTER TABLE income_rules ADD COLUMN direction TEXT NOT NULL DEFAULT 'deposit'"
+            )
+            conn.execute(
+                "ALTER TABLE income_rules ADD COLUMN expense_bucket_id INTEGER REFERENCES buckets(id)"
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS income_buckets (
@@ -200,6 +208,8 @@ class Database:
                 source_name TEXT NOT NULL,
                 bucket_id INTEGER REFERENCES income_buckets(id),
                 person TEXT,
+                direction TEXT NOT NULL DEFAULT 'deposit',
+                expense_bucket_id INTEGER REFERENCES buckets(id),
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(tenant_id, match_text)
             );
@@ -826,6 +836,12 @@ class Database:
             ).fetchone()
             if rule is not None:
                 raise ValueError("Bucket is used by merchant rules and cannot be deleted.")
+            withdrawal_rule = conn.execute(
+                "SELECT 1 FROM income_rules WHERE expense_bucket_id = ? AND tenant_id = ? LIMIT 1",
+                (bucket_id, tenant_id),
+            ).fetchone()
+            if withdrawal_rule is not None:
+                raise ValueError("Bucket is used by withdrawal rules and cannot be deleted.")
             conn.execute(
                 "DELETE FROM buckets WHERE id = ? AND tenant_id = ?",
                 (bucket_id, tenant_id),
@@ -1509,11 +1525,16 @@ class Database:
 
     # --- Income rules ---
 
+    INCOME_RULE_DIRECTIONS = ("deposit", "withdrawal")
+
     _INCOME_RULE_SELECT = """
         SELECT r.id, r.match_text, r.source_name, r.bucket_id, r.person,
-               b.name AS bucket_name
+               r.direction, r.expense_bucket_id,
+               b.name AS bucket_name,
+               eb.name AS expense_bucket_name
         FROM income_rules r
         LEFT JOIN income_buckets b ON b.id = r.bucket_id AND b.tenant_id = r.tenant_id
+        LEFT JOIN buckets eb ON eb.id = r.expense_bucket_id AND eb.tenant_id = r.tenant_id
     """
 
     def _row_to_income_rule(self, row: sqlite3.Row) -> IncomeRule:
@@ -1524,7 +1545,28 @@ class Database:
             bucket_id=row["bucket_id"],
             bucket_name=row["bucket_name"],
             person=row["person"],
+            direction=row["direction"],
+            expense_bucket_id=row["expense_bucket_id"],
+            expense_bucket_name=row["expense_bucket_name"],
         )
+
+    def _validate_income_rule_buckets(
+        self,
+        direction: str,
+        bucket_id: int | None,
+        expense_bucket_id: int | None,
+    ) -> tuple[int | None, int | None]:
+        if direction not in self.INCOME_RULE_DIRECTIONS:
+            raise ValueError("Direction must be 'deposit' or 'withdrawal'.")
+        if direction == "withdrawal":
+            bucket_id = None
+            if expense_bucket_id is not None and self.get_bucket(expense_bucket_id) is None:
+                raise ValueError(f"Expense bucket {expense_bucket_id} not found.")
+        else:
+            expense_bucket_id = None
+            if bucket_id is not None and self.get_income_bucket(bucket_id) is None:
+                raise ValueError(f"Income bucket {bucket_id} not found.")
+        return bucket_id, expense_bucket_id
 
     def list_income_rules(self) -> list[IncomeRule]:
         with self.connection() as conn:
@@ -1552,19 +1594,24 @@ class Database:
         source_name: str,
         bucket_id: int | None = None,
         person: str | None = None,
+        direction: str = "deposit",
+        expense_bucket_id: int | None = None,
     ) -> IncomeRule:
         cleaned_match = match_text.strip()
         if not cleaned_match:
             raise ValueError("Match text is required.")
         cleaned_source = source_name.strip() or cleaned_match
-        if bucket_id is not None and self.get_income_bucket(bucket_id) is None:
-            raise ValueError(f"Income bucket {bucket_id} not found.")
+        bucket_id, expense_bucket_id = self._validate_income_rule_buckets(
+            direction, bucket_id, expense_bucket_id
+        )
         with self.connection() as conn:
             try:
                 cursor = conn.execute(
                     """
-                    INSERT INTO income_rules (tenant_id, match_text, source_name, bucket_id, person)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO income_rules (
+                        tenant_id, match_text, source_name, bucket_id, person,
+                        direction, expense_bucket_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         self._require_tenant(),
@@ -1572,6 +1619,8 @@ class Database:
                         cleaned_source,
                         bucket_id,
                         person.strip() if person and person.strip() else None,
+                        direction,
+                        expense_bucket_id,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -1590,6 +1639,8 @@ class Database:
         source_name: str,
         bucket_id: int | None,
         person: str | None,
+        direction: str = "deposit",
+        expense_bucket_id: int | None = None,
     ) -> IncomeRule:
         if self.get_income_rule(rule_id) is None:
             raise ValueError(f"Income rule {rule_id} not found.")
@@ -1597,14 +1648,16 @@ class Database:
         if not cleaned_match:
             raise ValueError("Match text is required.")
         cleaned_source = source_name.strip() or cleaned_match
-        if bucket_id is not None and self.get_income_bucket(bucket_id) is None:
-            raise ValueError(f"Income bucket {bucket_id} not found.")
+        bucket_id, expense_bucket_id = self._validate_income_rule_buckets(
+            direction, bucket_id, expense_bucket_id
+        )
         with self.connection() as conn:
             try:
                 conn.execute(
                     """
                     UPDATE income_rules
-                    SET match_text = ?, source_name = ?, bucket_id = ?, person = ?
+                    SET match_text = ?, source_name = ?, bucket_id = ?, person = ?,
+                        direction = ?, expense_bucket_id = ?
                     WHERE id = ? AND tenant_id = ?
                     """,
                     (
@@ -1612,6 +1665,8 @@ class Database:
                         cleaned_source,
                         bucket_id,
                         person.strip() if person and person.strip() else None,
+                        direction,
+                        expense_bucket_id,
                         rule_id,
                         self._require_tenant(),
                     ),

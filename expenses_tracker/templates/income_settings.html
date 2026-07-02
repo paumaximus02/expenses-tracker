@@ -63,12 +63,12 @@
   </section>
 
   <section class="panel">
-    <h2>Income rules</h2>
+    <h2>Bank email rules</h2>
     <p class="settings-help">
-      When a synced email contains the match text, it is imported as income with this
-      bucket and person. The amount, date, and description (used as the income source)
-      are read from the email; the source name below is used when the email has no
-      description line.
+      When a synced email contains the match text, it is imported using this rule.
+      Deposit rules create income entries; withdrawal rules (e.g. mortgage payments)
+      create expenses in the chosen expense bucket. The amount and date are read
+      from the email.
     </p>
     <form method="post" action="{{ url_for('create_income_rule') }}" class="inline-form">
       <label class="field">
@@ -80,11 +80,27 @@
         <input type="text" name="source_name" placeholder="ACME salary">
       </label>
       <label class="field">
-        <span>Bucket</span>
+        <span>Direction</span>
+        <select name="direction">
+          <option value="deposit">Deposit → income</option>
+          <option value="withdrawal">Withdrawal → expense</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Income bucket (deposits)</span>
         <select name="bucket_id">
           <option value="">Unassigned</option>
           {% for bucket in income_buckets %}
             <option value="{{ bucket.id }}">{{ bucket.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span>Expense bucket (withdrawals)</span>
+        <select name="expense_bucket_id">
+          <option value="">Pending review</option>
+          {% for option in expense_bucket_options %}
+            <option value="{{ option.id }}">{{ option.label }}</option>
           {% endfor %}
         </select>
       </label>
@@ -102,7 +118,12 @@
             <div class="bucket-info">
               <strong>{{ rule.source_name }}</strong>
               <span class="muted">contains “{{ rule.match_text }}”</span>
-              <span class="pill">{{ rule.bucket_name or "Unassigned" }}</span>
+              <span class="pill">{{ "Withdrawal" if rule.direction == "withdrawal" else "Deposit" }}</span>
+              {% if rule.direction == "withdrawal" %}
+                <span class="pill">{{ rule.expense_bucket_name or "Pending review" }}</span>
+              {% else %}
+                <span class="pill">{{ rule.bucket_name or "Unassigned" }}</span>
+              {% endif %}
               {% if rule.person %}<span class="pill">{{ rule.person }}</span>{% endif %}
             </div>
             <details class="bucket-actions">
@@ -117,11 +138,27 @@
                   <input type="text" name="source_name" value="{{ rule.source_name }}">
                 </label>
                 <label class="field">
-                  <span>Bucket</span>
+                  <span>Direction</span>
+                  <select name="direction">
+                    <option value="deposit" {% if rule.direction != "withdrawal" %}selected{% endif %}>Deposit → income</option>
+                    <option value="withdrawal" {% if rule.direction == "withdrawal" %}selected{% endif %}>Withdrawal → expense</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Income bucket (deposits)</span>
                   <select name="bucket_id">
                     <option value="">Unassigned</option>
                     {% for bucket in income_buckets %}
                       <option value="{{ bucket.id }}" {% if rule.bucket_id == bucket.id %}selected{% endif %}>{{ bucket.name }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Expense bucket (withdrawals)</span>
+                  <select name="expense_bucket_id">
+                    <option value="">Pending review</option>
+                    {% for option in expense_bucket_options %}
+                      <option value="{{ option.id }}" {% if rule.expense_bucket_id == option.id %}selected{% endif %}>{{ option.label }}</option>
                     {% endfor %}
                   </select>
                 </label>

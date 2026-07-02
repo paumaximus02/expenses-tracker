@@ -574,6 +574,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             "income_settings.html",
             income_buckets=income_buckets,
             income_rules=income_rules,
+            expense_bucket_options=_bucket_options(db, assignable_only=True),
             persons=persons,
             income_gmail_search_query=sync.tenant.income_gmail_search_query,
             page="income",
@@ -613,12 +614,15 @@ def create_app(settings: Settings | None = None) -> Flask:
     def create_income_rule():
         db, _ = _services()
         bucket_id_raw = request.form.get("bucket_id", "").strip()
+        expense_bucket_id_raw = request.form.get("expense_bucket_id", "").strip()
         try:
             rule = db.create_income_rule(
                 match_text=request.form.get("match_text", ""),
                 source_name=request.form.get("source_name", ""),
                 bucket_id=int(bucket_id_raw) if bucket_id_raw else None,
                 person=request.form.get("person", ""),
+                direction=request.form.get("direction", "deposit"),
+                expense_bucket_id=int(expense_bucket_id_raw) if expense_bucket_id_raw else None,
             )
             flash(f"Created income rule for '{rule.source_name}'.", "success")
         except (ValueError, TypeError) as exc:
@@ -629,6 +633,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     def update_income_rule(rule_id: int):
         db, _ = _services()
         bucket_id_raw = request.form.get("bucket_id", "").strip()
+        expense_bucket_id_raw = request.form.get("expense_bucket_id", "").strip()
         try:
             rule = db.update_income_rule(
                 rule_id,
@@ -636,6 +641,8 @@ def create_app(settings: Settings | None = None) -> Flask:
                 source_name=request.form.get("source_name", ""),
                 bucket_id=int(bucket_id_raw) if bucket_id_raw else None,
                 person=request.form.get("person", ""),
+                direction=request.form.get("direction", "deposit"),
+                expense_bucket_id=int(expense_bucket_id_raw) if expense_bucket_id_raw else None,
             )
             flash(f"Updated income rule for '{rule.source_name}'.", "success")
         except (ValueError, TypeError) as exc:

@@ -32,6 +32,7 @@ class SyncCompletedEvent:
     skipped: int
     income_checked: int = 0
     income_imported: int = 0
+    withdrawals_imported: int = 0
     notification_id: int | None = None
     error: str | None = None
     auto_assigned_transactions: list[SyncTransactionSummary] = field(default_factory=list)
@@ -86,6 +87,7 @@ def build_sync_completed_event(
         skipped=result.get("skipped", 0),
         income_checked=result.get("income_checked", 0),
         income_imported=result.get("income_imported", 0),
+        withdrawals_imported=result.get("withdrawals_imported", 0),
         notification_id=notification_id,
         error=error,
         auto_assigned_transactions=auto_assigned_transactions,

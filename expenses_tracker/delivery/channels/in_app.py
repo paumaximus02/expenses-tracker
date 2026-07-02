@@ -37,6 +37,7 @@ class InAppChannel:
                 "skipped": event.skipped,
                 "income_checked": event.income_checked,
                 "income_imported": event.income_imported,
+                "withdrawals_imported": event.withdrawals_imported,
             }
         )
         notification = self.db.create_notification(

@@ -24,6 +24,9 @@ def format_sync_result(result: dict[str, int]) -> tuple[str, str]:
             f"{'' if income_checked == 1 else 's'} checked, "
             f"{income_imported} imported."
         )
+    withdrawals = result.get("withdrawals_imported", 0)
+    if withdrawals:
+        message += f" Withdrawals: {withdrawals} imported as expenses."
     return title, message
 
 

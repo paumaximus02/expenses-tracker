@@ -288,6 +288,144 @@ class IncomeDatabaseTests(unittest.TestCase):
             "from:(payroll.com) subject:(payment)",
         )
 
+    def test_withdrawal_rule_round_trip(self) -> None:
+        expense_bucket = self.db.create_bucket("Mortgage")
+        rule = self.db.create_income_rule(
+            match_text="CMG MORTGAGE",
+            source_name="CMG Mortgage",
+            bucket_id=99,  # ignored for withdrawal rules
+            direction="withdrawal",
+            expense_bucket_id=expense_bucket.id,
+            person="Juan",
+        )
+        self.assertEqual(rule.direction, "withdrawal")
+        self.assertIsNone(rule.bucket_id)
+        self.assertEqual(rule.expense_bucket_id, expense_bucket.id)
+        self.assertEqual(rule.expense_bucket_name, "Mortgage")
+
+        with self.assertRaises(ValueError):
+            self.db.create_income_rule(
+                match_text="BAD DIRECTION",
+                source_name="Bad",
+                direction="sideways",
+            )
+        with self.assertRaises(ValueError):
+            self.db.delete_bucket(expense_bucket.id)
+
+
+class WithdrawalSyncTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self._tmp.name) / "test.db"
+        global_db = Database(db_path)
+        self.tenant_id = global_db.get_default_tenant_id()
+        global_db.update_tenant_settings(
+            self.tenant_id,
+            income_gmail_search_query="from:(lbsfcu.org)",
+        )
+        self.tenant = global_db.get_tenant(self.tenant_id)
+        self.db = Database(db_path, tenant_id=self.tenant_id)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _sync_service(self, messages: list[dict]):
+        from expenses_tracker.sync import ExpenseSyncService
+
+        class StubGmail:
+            def __init__(self, stubbed: list[dict]) -> None:
+                self.stubbed = stubbed
+
+            def fetch_messages(self, query: str) -> list[dict]:
+                return self.stubbed
+
+        return ExpenseSyncService(
+            None,
+            self.db,
+            StubGmail(messages),
+            None,
+            tenant=self.tenant,
+        )
+
+    def test_withdrawal_email_imports_as_expense(self) -> None:
+        from expenses_tracker.models import ExpenseStatus
+
+        bucket = self.db.create_bucket("Mortgage")
+        self.db.create_income_rule(
+            match_text="CMG MORTGAGE",
+            source_name="CMG Mortgage",
+            direction="withdrawal",
+            expense_bucket_id=bucket.id,
+            person="Juan",
+        )
+        body = (
+            "Withdrawal transaction just posted to your account Checking **3231.\n\n"
+            "Date: 6/1/2026\n"
+            "Description: Withdrawal-ACH-A-CMG MORTGAGE INC WEBCMG MORTGAGE INC (CMG MORTGA)\n"
+            "Amount: $3,145.20\n"
+            "Balance: $10,000.00."
+        )
+        message = _gmail_message(
+            message_id="msg-w1",
+            subject="ACH Transaction Alert",
+            body=body,
+        )
+        result = self._sync_service([message]).sync_income()
+
+        self.assertEqual(result["withdrawals_imported"], 1)
+        self.assertEqual(result["income_imported"], 0)
+        expenses = self.db.list_expenses()
+        self.assertEqual(len(expenses), 1)
+        expense = expenses[0]
+        self.assertEqual(expense.merchant, "CMG Mortgage")
+        self.assertEqual(expense.amount, 3145.20)
+        self.assertEqual(expense.transaction_date, date(2026, 6, 1))
+        self.assertEqual(expense.bucket_id, bucket.id)
+        self.assertEqual(expense.status, ExpenseStatus.AUTO)
+        self.assertEqual(expense.card_holder, "Juan")
+        self.assertEqual(result["withdrawal_expense_ids"], [expense.id])
+
+        # Second sync of the same message is deduped.
+        rerun = self._sync_service([message]).sync_income()
+        self.assertEqual(rerun["withdrawals_imported"], 0)
+        self.assertEqual(rerun["income_skipped"], 1)
+        self.assertEqual(len(self.db.list_expenses()), 1)
+
+    def test_withdrawal_without_bucket_is_pending(self) -> None:
+        from expenses_tracker.models import ExpenseStatus
+
+        self.db.create_income_rule(
+            match_text="CMG MORTGAGE",
+            source_name="CMG Mortgage",
+            direction="withdrawal",
+        )
+        message = _gmail_message(
+            message_id="msg-w2",
+            subject="ACH Transaction Alert",
+            body="Description: Withdrawal-ACH-A-CMG MORTGAGE INC\nAmount: $3,145.20",
+        )
+        result = self._sync_service([message]).sync_income()
+        self.assertEqual(result["withdrawals_imported"], 1)
+        expense = self.db.list_expenses()[0]
+        self.assertIsNone(expense.bucket_id)
+        self.assertEqual(expense.status, ExpenseStatus.PENDING)
+
+    def test_deposit_rules_still_import_income(self) -> None:
+        self.db.create_income_rule(
+            match_text="SUNCOAST PROPERT",
+            source_name="Rental",
+        )
+        message = _gmail_message(
+            message_id="msg-d1",
+            subject="ACH Transaction Alert",
+            body=LBS_BODY,
+        )
+        result = self._sync_service([message]).sync_income()
+        self.assertEqual(result["income_imported"], 1)
+        self.assertEqual(result["withdrawals_imported"], 0)
+        self.assertEqual(len(self.db.list_expenses()), 0)
+        self.assertEqual(len(self.db.list_incomes()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

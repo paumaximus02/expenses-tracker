@@ -181,6 +181,8 @@ def sync_command(tenant_id: int) -> None:
             f" Income: {result['income_checked']} messages checked, "
             f"{result['income_imported']} imported."
         )
+    if result.get("withdrawals_imported"):
+        message += f" Withdrawals: {result['withdrawals_imported']} imported as expenses."
     click.echo(message)
 
 
