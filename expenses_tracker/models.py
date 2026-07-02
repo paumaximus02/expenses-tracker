@@ -37,6 +37,7 @@ class Tenant:
     gmail_search_query: str
     gmail_token_json: str | None
     created_at: datetime
+    income_gmail_search_query: str = ""
 
 
 @dataclass
@@ -115,6 +116,50 @@ class ParsedEmail:
     body_text: str
     card_last_four: str | None = None
     card_holder: str | None = None
+
+
+@dataclass
+class IncomeBucket:
+    id: int
+    name: str
+
+
+@dataclass
+class IncomeRule:
+    id: int
+    match_text: str
+    source_name: str
+    bucket_id: int | None
+    bucket_name: str | None
+    person: str | None
+
+
+@dataclass
+class Income:
+    id: int
+    gmail_message_id: str | None
+    received_date: date
+    allocated_month: str
+    source: str
+    amount: float
+    currency: str
+    bucket_id: int | None
+    bucket_name: str | None
+    person: str | None
+    email_subject: str | None
+    email_from: str | None
+
+
+@dataclass
+class ParsedIncomeEmail:
+    gmail_message_id: str
+    received_date: date
+    amount: float
+    currency: str
+    email_subject: str
+    email_from: str
+    rule: IncomeRule
+    description: str | None = None
 
 
 @dataclass

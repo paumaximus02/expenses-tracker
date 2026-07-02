@@ -45,6 +45,16 @@
         No counted expenses{% if person %} for {{ person }}{% endif %}
       {% endif %}
     </p>
+    {% if income_total %}
+      <p class="report-summary-meta report-amount">
+        Income:
+        <span class="report-amount-value">${{ "%.2f"|format(income_total) }}</span>
+        <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+        · Net:
+        <span class="report-amount-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
+        <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+      </p>
+    {% endif %}
   </div>
   {% if chart_slices %}
     <div class="report-summary-chart">
@@ -90,6 +100,87 @@
   <div class="empty-state">
     <p>No counted expenses for this period{% if person %} ({{ person }}){% endif %}.</p>
   </div>
+{% endif %}
+
+{% if income_totals %}
+  <section class="panel">
+    <h2>Income</h2>
+    <p class="subtitle">Allocated to {{ month }}{% if person %} · {{ person }}{% endif %}</p>
+    <div class="report-table-wrap">
+      <table class="report-table responsive-table">
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th>Entries</th>
+            <th class="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for bucket_id, bucket_name, total, count in income_totals %}
+            <tr class="report-row-link"
+                tabindex="0"
+                role="link"
+                data-href="{{ url_for('income_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('income_page', month=month, person=person or none) }}">
+              <td data-label="Bucket">{{ bucket_name }}</td>
+              <td data-label="Entries">{{ count }}</td>
+              <td class="num report-amount" data-label="Total">
+                <span class="report-amount-value">${{ "%.2f"|format(total) }}</span>
+                <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th data-label="Summary">Income total</th>
+            <th data-label="Entries">{{ income_count }}</th>
+            <th class="num report-amount" data-label="Total">
+              <span class="report-amount-value">${{ "%.2f"|format(income_total) }}</span>
+              <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+            </th>
+          </tr>
+          <tr>
+            <th data-label="Summary">Net (income − expenses)</th>
+            <th data-label="Entries"></th>
+            <th class="num report-amount" data-label="Total">
+              <span class="report-amount-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
+              <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+            </th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    {% if income_person_totals %}
+      <h3>By household member</h3>
+      <div class="report-table-wrap">
+        <table class="report-table responsive-table">
+          <thead>
+            <tr>
+              <th>Person</th>
+              <th>Entries</th>
+              <th class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for member, total, count in income_person_totals %}
+              <tr class="report-row-link"
+                  tabindex="0"
+                  role="link"
+                  data-href="{{ url_for('income_page', month=month, person=member) if member else url_for('income_page', month=month) }}">
+                <td data-label="Person">{{ member or "Unassigned" }}</td>
+                <td data-label="Entries">{{ count }}</td>
+                <td class="num report-amount" data-label="Total">
+                  <span class="report-amount-value">${{ "%.2f"|format(total) }}</span>
+                  <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
 {% endif %}
 
 {% if excluded_totals %}

@@ -14,6 +14,9 @@ from expenses_tracker.models import (
     Bucket,
     Expense,
     ExpenseStatus,
+    Income,
+    IncomeBucket,
+    IncomeRule,
     MatchType,
     MerchantRule,
     Notification,
@@ -107,6 +110,7 @@ class Database:
             conn.execute("ALTER TABLE expenses ADD COLUMN sync_notification_id INTEGER")
         self._migrate_tenancy(conn)
         self._migrate_buckets_hierarchy(conn)
+        self._migrate_income(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS dismissed_merchant_groups (
@@ -172,6 +176,57 @@ class Database:
                 """,
                 (1, "merchant_rules_deduped", "true"),
             )
+
+    def _migrate_income(self, conn: sqlite3.Connection) -> None:
+        tenant_columns = {row[1] for row in conn.execute("PRAGMA table_info(tenants)")}
+        if "income_gmail_search_query" not in tenant_columns:
+            conn.execute(
+                "ALTER TABLE tenants ADD COLUMN income_gmail_search_query TEXT NOT NULL DEFAULT ''"
+            )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS income_buckets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(tenant_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS income_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                match_text TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                bucket_id INTEGER REFERENCES income_buckets(id),
+                person TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(tenant_id, match_text)
+            );
+
+            CREATE TABLE IF NOT EXISTS incomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                gmail_message_id TEXT,
+                received_date TEXT NOT NULL,
+                allocated_month TEXT NOT NULL,
+                source TEXT NOT NULL,
+                amount REAL NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                bucket_id INTEGER REFERENCES income_buckets(id),
+                person TEXT,
+                email_subject TEXT,
+                email_from TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_incomes_tenant_gmail
+                ON incomes(tenant_id, gmail_message_id)
+                WHERE gmail_message_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_incomes_month
+                ON incomes(tenant_id, allocated_month);
+            """
+        )
 
     def _dedupe_merchant_rules(self, conn: sqlite3.Connection, *, tenant_id: int) -> None:
         rows = conn.execute(
@@ -1370,6 +1425,410 @@ class Database:
             rows = conn.execute(query, params).fetchall()
         return [(row["bucket_name"], row["total"], row["count"]) for row in rows]
 
+    # --- Income buckets ---
+
+    def _row_to_income_bucket(self, row: sqlite3.Row) -> IncomeBucket:
+        return IncomeBucket(id=row["id"], name=row["name"])
+
+    def list_income_buckets(self) -> list[IncomeBucket]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, name FROM income_buckets WHERE tenant_id = ? ORDER BY name",
+                (self._require_tenant(),),
+            ).fetchall()
+        return [self._row_to_income_bucket(row) for row in rows]
+
+    def get_income_bucket(self, bucket_id: int) -> IncomeBucket | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT id, name FROM income_buckets WHERE id = ? AND tenant_id = ?",
+                (bucket_id, self._require_tenant()),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_income_bucket(row)
+
+    def create_income_bucket(self, name: str) -> IncomeBucket:
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValueError("Income bucket name is required.")
+        with self.connection() as conn:
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO income_buckets (tenant_id, name) VALUES (?, ?)",
+                    (self._require_tenant(), cleaned),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("An income bucket with that name already exists.") from exc
+            bucket_id = cursor.lastrowid
+        bucket = self.get_income_bucket(bucket_id)
+        if bucket is None:
+            raise RuntimeError("Failed to load created income bucket.")
+        return bucket
+
+    def update_income_bucket(self, bucket_id: int, *, name: str) -> IncomeBucket:
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValueError("Income bucket name is required.")
+        if self.get_income_bucket(bucket_id) is None:
+            raise ValueError(f"Income bucket {bucket_id} not found.")
+        with self.connection() as conn:
+            try:
+                conn.execute(
+                    "UPDATE income_buckets SET name = ? WHERE id = ? AND tenant_id = ?",
+                    (cleaned, bucket_id, self._require_tenant()),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("An income bucket with that name already exists.") from exc
+        updated = self.get_income_bucket(bucket_id)
+        if updated is None:
+            raise RuntimeError("Failed to load updated income bucket.")
+        return updated
+
+    def delete_income_bucket(self, bucket_id: int) -> None:
+        if self.get_income_bucket(bucket_id) is None:
+            raise ValueError(f"Income bucket {bucket_id} not found.")
+        tenant_id = self._require_tenant()
+        with self.connection() as conn:
+            used = conn.execute(
+                "SELECT 1 FROM incomes WHERE bucket_id = ? AND tenant_id = ? LIMIT 1",
+                (bucket_id, tenant_id),
+            ).fetchone()
+            if used is not None:
+                raise ValueError("Income bucket is used by income entries and cannot be deleted.")
+            rule = conn.execute(
+                "SELECT 1 FROM income_rules WHERE bucket_id = ? AND tenant_id = ? LIMIT 1",
+                (bucket_id, tenant_id),
+            ).fetchone()
+            if rule is not None:
+                raise ValueError("Income bucket is used by income rules and cannot be deleted.")
+            conn.execute(
+                "DELETE FROM income_buckets WHERE id = ? AND tenant_id = ?",
+                (bucket_id, tenant_id),
+            )
+
+    # --- Income rules ---
+
+    _INCOME_RULE_SELECT = """
+        SELECT r.id, r.match_text, r.source_name, r.bucket_id, r.person,
+               b.name AS bucket_name
+        FROM income_rules r
+        LEFT JOIN income_buckets b ON b.id = r.bucket_id AND b.tenant_id = r.tenant_id
+    """
+
+    def _row_to_income_rule(self, row: sqlite3.Row) -> IncomeRule:
+        return IncomeRule(
+            id=row["id"],
+            match_text=row["match_text"],
+            source_name=row["source_name"],
+            bucket_id=row["bucket_id"],
+            bucket_name=row["bucket_name"],
+            person=row["person"],
+        )
+
+    def list_income_rules(self) -> list[IncomeRule]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                self._INCOME_RULE_SELECT
+                + " WHERE r.tenant_id = ? ORDER BY r.source_name COLLATE NOCASE",
+                (self._require_tenant(),),
+            ).fetchall()
+        return [self._row_to_income_rule(row) for row in rows]
+
+    def get_income_rule(self, rule_id: int) -> IncomeRule | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                self._INCOME_RULE_SELECT + " WHERE r.id = ? AND r.tenant_id = ?",
+                (rule_id, self._require_tenant()),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_income_rule(row)
+
+    def create_income_rule(
+        self,
+        *,
+        match_text: str,
+        source_name: str,
+        bucket_id: int | None = None,
+        person: str | None = None,
+    ) -> IncomeRule:
+        cleaned_match = match_text.strip()
+        if not cleaned_match:
+            raise ValueError("Match text is required.")
+        cleaned_source = source_name.strip() or cleaned_match
+        if bucket_id is not None and self.get_income_bucket(bucket_id) is None:
+            raise ValueError(f"Income bucket {bucket_id} not found.")
+        with self.connection() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO income_rules (tenant_id, match_text, source_name, bucket_id, person)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self._require_tenant(),
+                        cleaned_match,
+                        cleaned_source,
+                        bucket_id,
+                        person.strip() if person and person.strip() else None,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("An income rule with that match text already exists.") from exc
+            rule_id = cursor.lastrowid
+        rule = self.get_income_rule(rule_id)
+        if rule is None:
+            raise RuntimeError("Failed to load created income rule.")
+        return rule
+
+    def update_income_rule(
+        self,
+        rule_id: int,
+        *,
+        match_text: str,
+        source_name: str,
+        bucket_id: int | None,
+        person: str | None,
+    ) -> IncomeRule:
+        if self.get_income_rule(rule_id) is None:
+            raise ValueError(f"Income rule {rule_id} not found.")
+        cleaned_match = match_text.strip()
+        if not cleaned_match:
+            raise ValueError("Match text is required.")
+        cleaned_source = source_name.strip() or cleaned_match
+        if bucket_id is not None and self.get_income_bucket(bucket_id) is None:
+            raise ValueError(f"Income bucket {bucket_id} not found.")
+        with self.connection() as conn:
+            try:
+                conn.execute(
+                    """
+                    UPDATE income_rules
+                    SET match_text = ?, source_name = ?, bucket_id = ?, person = ?
+                    WHERE id = ? AND tenant_id = ?
+                    """,
+                    (
+                        cleaned_match,
+                        cleaned_source,
+                        bucket_id,
+                        person.strip() if person and person.strip() else None,
+                        rule_id,
+                        self._require_tenant(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("An income rule with that match text already exists.") from exc
+        updated = self.get_income_rule(rule_id)
+        if updated is None:
+            raise RuntimeError("Failed to load updated income rule.")
+        return updated
+
+    def delete_income_rule(self, rule_id: int) -> None:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM income_rules WHERE id = ? AND tenant_id = ?",
+                (rule_id, self._require_tenant()),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Income rule {rule_id} not found.")
+
+    # --- Incomes ---
+
+    _INCOME_SELECT = """
+        SELECT i.*, b.name AS bucket_name
+        FROM incomes i
+        LEFT JOIN income_buckets b ON b.id = i.bucket_id AND b.tenant_id = i.tenant_id
+    """
+
+    def _row_to_income(self, row: sqlite3.Row) -> Income:
+        return Income(
+            id=row["id"],
+            gmail_message_id=row["gmail_message_id"],
+            received_date=date.fromisoformat(row["received_date"]),
+            allocated_month=row["allocated_month"],
+            source=row["source"],
+            amount=row["amount"],
+            currency=row["currency"],
+            bucket_id=row["bucket_id"],
+            bucket_name=row["bucket_name"],
+            person=row["person"],
+            email_subject=row["email_subject"],
+            email_from=row["email_from"],
+        )
+
+    def income_exists(self, gmail_message_id: str) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM incomes WHERE gmail_message_id = ? AND tenant_id = ?",
+                (gmail_message_id, self._require_tenant()),
+            ).fetchone()
+        return row is not None
+
+    def insert_income(
+        self,
+        *,
+        gmail_message_id: str | None,
+        received_date: date,
+        allocated_month: str,
+        source: str,
+        amount: float,
+        currency: str = "USD",
+        bucket_id: int | None = None,
+        person: str | None = None,
+        email_subject: str | None = None,
+        email_from: str | None = None,
+    ) -> int:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO incomes (
+                    tenant_id, gmail_message_id, received_date, allocated_month, source,
+                    amount, currency, bucket_id, person, email_subject, email_from
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._require_tenant(),
+                    gmail_message_id,
+                    received_date.isoformat(),
+                    allocated_month,
+                    source,
+                    amount,
+                    currency,
+                    bucket_id,
+                    person,
+                    email_subject,
+                    email_from,
+                ),
+            )
+            return cursor.lastrowid
+
+    def list_incomes(
+        self,
+        *,
+        month: str | None = None,
+        person: str | None = None,
+        bucket_id: int | None = None,
+    ) -> list[Income]:
+        query = self._INCOME_SELECT + " WHERE i.tenant_id = ?"
+        params: list[object] = [self._require_tenant()]
+        if month:
+            query += " AND i.allocated_month = ?"
+            params.append(month)
+        if person:
+            query += " AND i.person = ?"
+            params.append(person)
+        if bucket_id is not None:
+            query += " AND i.bucket_id = ?"
+            params.append(bucket_id)
+        query += " ORDER BY i.received_date DESC, i.id DESC"
+        with self.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_income(row) for row in rows]
+
+    def get_income(self, income_id: int) -> Income | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                self._INCOME_SELECT + " WHERE i.id = ? AND i.tenant_id = ?",
+                (income_id, self._require_tenant()),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_income(row)
+
+    def update_income(
+        self,
+        income_id: int,
+        *,
+        allocated_month: str,
+        bucket_id: int | None,
+        person: str | None,
+    ) -> Income | None:
+        income = self.get_income(income_id)
+        if income is None:
+            raise ValueError(f"Income {income_id} not found.")
+        if bucket_id is not None and self.get_income_bucket(bucket_id) is None:
+            raise ValueError(f"Income bucket {bucket_id} not found.")
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE incomes
+                SET allocated_month = ?, bucket_id = ?, person = ?
+                WHERE id = ? AND tenant_id = ?
+                """,
+                (
+                    allocated_month,
+                    bucket_id,
+                    person.strip() if person and person.strip() else None,
+                    income_id,
+                    self._require_tenant(),
+                ),
+            )
+        return self.get_income(income_id)
+
+    def delete_income(self, income_id: int) -> None:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM incomes WHERE id = ? AND tenant_id = ?",
+                (income_id, self._require_tenant()),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Income {income_id} not found.")
+
+    def monthly_income_totals(
+        self,
+        month: str,
+        *,
+        person: str | None = None,
+    ) -> list[tuple[int | None, str, float, int]]:
+        query = """
+            SELECT i.bucket_id,
+                   COALESCE(b.name, 'Unassigned') AS bucket_name,
+                   SUM(i.amount) AS total,
+                   COUNT(*) AS count
+            FROM incomes i
+            LEFT JOIN income_buckets b ON b.id = i.bucket_id AND b.tenant_id = i.tenant_id
+            WHERE i.allocated_month = ? AND i.tenant_id = ?
+        """
+        params: list[object] = [month, self._require_tenant()]
+        if person is not None:
+            query += " AND i.person = ?"
+            params.append(person)
+        query += " GROUP BY i.bucket_id ORDER BY total DESC"
+        with self.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            (row["bucket_id"], row["bucket_name"], row["total"], row["count"])
+            for row in rows
+        ]
+
+    def monthly_income_person_totals(self, month: str) -> list[tuple[str | None, float, int]]:
+        query = """
+            SELECT i.person,
+                   SUM(i.amount) AS total,
+                   COUNT(*) AS count
+            FROM incomes i
+            WHERE i.allocated_month = ? AND i.tenant_id = ?
+            GROUP BY i.person
+            ORDER BY total DESC
+        """
+        with self.connection() as conn:
+            rows = conn.execute(query, (month, self._require_tenant())).fetchall()
+        return [(row["person"], row["total"], row["count"]) for row in rows]
+
+    def list_income_persons(self) -> list[str]:
+        tenant_id = self._require_tenant()
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT person FROM incomes WHERE tenant_id = ? AND person IS NOT NULL
+                UNION
+                SELECT person FROM income_rules WHERE tenant_id = ? AND person IS NOT NULL
+                ORDER BY person
+                """,
+                (tenant_id, tenant_id),
+            ).fetchall()
+        return [row["person"] for row in rows]
+
     def list_dismissed_group_keys(self) -> set[str]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -1578,6 +2037,11 @@ class Database:
             card_holders = {}
         if not isinstance(card_holders, dict):
             card_holders = {}
+        income_query = (
+            row["income_gmail_search_query"]
+            if "income_gmail_search_query" in row.keys()
+            else ""
+        )
         return Tenant(
             id=row["id"],
             name=row["name"],
@@ -1586,6 +2050,7 @@ class Database:
             gmail_search_query=row["gmail_search_query"],
             gmail_token_json=row["gmail_token_json"],
             created_at=self._parse_db_datetime(row["created_at"]),
+            income_gmail_search_query=income_query or "",
         )
 
     def get_tenant(self, tenant_id: int) -> Tenant | None:
@@ -1593,7 +2058,7 @@ class Database:
             row = conn.execute(
                 """
                 SELECT id, name, invite_code, card_holders, gmail_search_query,
-                       gmail_token_json, created_at
+                       gmail_token_json, created_at, income_gmail_search_query
                 FROM tenants
                 WHERE id = ?
                 """,
@@ -1611,7 +2076,7 @@ class Database:
             row = conn.execute(
                 """
                 SELECT id, name, invite_code, card_holders, gmail_search_query,
-                       gmail_token_json, created_at
+                       gmail_token_json, created_at, income_gmail_search_query
                 FROM tenants
                 WHERE invite_code = ?
                 """,
@@ -1626,7 +2091,7 @@ class Database:
             rows = conn.execute(
                 """
                 SELECT id, name, invite_code, card_holders, gmail_search_query,
-                       gmail_token_json, created_at
+                       gmail_token_json, created_at, income_gmail_search_query
                 FROM tenants
                 WHERE gmail_token_json IS NOT NULL AND TRIM(gmail_token_json) != ''
                 ORDER BY id
@@ -1678,6 +2143,7 @@ class Database:
         name: str | None = None,
         card_holders: dict[str, str] | None = None,
         gmail_search_query: str | None = None,
+        income_gmail_search_query: str | None = None,
     ) -> Tenant:
         tenant = self.get_tenant(tenant_id)
         if tenant is None:
@@ -1687,14 +2153,20 @@ class Database:
             raise ValueError("Household name is required.")
         holders = card_holders if card_holders is not None else tenant.card_holders
         query = gmail_search_query if gmail_search_query is not None else tenant.gmail_search_query
+        income_query = (
+            income_gmail_search_query
+            if income_gmail_search_query is not None
+            else tenant.income_gmail_search_query
+        )
         with self.connection() as conn:
             conn.execute(
                 """
                 UPDATE tenants
-                SET name = ?, card_holders = ?, gmail_search_query = ?
+                SET name = ?, card_holders = ?, gmail_search_query = ?,
+                    income_gmail_search_query = ?
                 WHERE id = ?
                 """,
-                (new_name, json.dumps(holders), query, tenant_id),
+                (new_name, json.dumps(holders), query, income_query, tenant_id),
             )
         updated = self.get_tenant(tenant_id)
         if updated is None:

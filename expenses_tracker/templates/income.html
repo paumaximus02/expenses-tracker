@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Income · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head page-head-row">
+  <div>
+    <h1>Income</h1>
+    <p class="subtitle">Paychecks and other income imported from Gmail</p>
+  </div>
+  <a href="{{ url_for('income_settings') }}" class="btn btn-secondary">Income buckets &amp; rules</a>
+</section>
+
+<form method="get" action="{{ url_for('income_page') }}" class="filters" id="income-filter-form">
+  <label class="field">
+    <span>Allocated month</span>
+    <input type="month" name="month" value="{{ month }}">
+  </label>
+  <label class="field">
+    <span>Person</span>
+    <select name="person">
+      <option value="">Everyone</option>
+      {% for name in persons %}
+        <option value="{{ name }}" {% if person == name %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field">
+    <span>Bucket</span>
+    <select name="bucket_id">
+      <option value="">All buckets</option>
+      {% for bucket in income_buckets %}
+        <option value="{{ bucket.id }}" {% if bucket_id == bucket.id %}selected{% endif %}>{{ bucket.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="btn btn-secondary">Filter</button>
+</form>
+
+<datalist id="income-persons">
+  {% for name in persons %}
+    <option value="{{ name }}"></option>
+  {% endfor %}
+</datalist>
+
+{% if incomes %}
+  <div class="expense-table-wrap">
+    <table class="expense-table responsive-table">
+      <thead>
+        <tr>
+          <th>Received</th>
+          <th>Allocated month</th>
+          <th>Source</th>
+          <th>Person</th>
+          <th>Bucket</th>
+          <th class="num">Amount</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for income in incomes %}
+          <tr>
+            <td data-label="Received">{{ income.received_date }}</td>
+            <td data-label="Allocated month">
+              {{ income.allocated_month }}
+              {% if income.allocated_month != income.received_date.strftime("%Y-%m") %}
+                <span class="pill">Moved</span>
+              {% endif %}
+            </td>
+            <td data-label="Source">{{ income.source }}</td>
+            <td data-label="Person">{{ income.person or "?" }}</td>
+            <td data-label="Bucket">{{ income.bucket_name or "Unassigned" }}</td>
+            <td class="num" data-label="Amount">${{ "%.2f"|format(income.amount) }}</td>
+            <td data-label="Actions">
+              <details class="expense-edit">
+                <summary>Edit</summary>
+                <form method="post" action="{{ url_for('update_income', income_id=income.id) }}" class="inline-form">
+                  <input type="hidden" name="filter_month" value="{{ month }}">
+                  <input type="hidden" name="filter_person" value="{{ person }}">
+                  <input type="hidden" name="filter_bucket_id" value="{{ bucket_id or '' }}">
+                  <label class="field">
+                    <span>Allocated month</span>
+                    <input type="month" name="allocated_month" value="{{ income.allocated_month }}" required>
+                  </label>
+                  <label class="field">
+                    <span>Bucket</span>
+                    <select name="bucket_id">
+                      <option value="">Unassigned</option>
+                      {% for bucket in income_buckets %}
+                        <option value="{{ bucket.id }}" {% if income.bucket_id == bucket.id %}selected{% endif %}>{{ bucket.name }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Person</span>
+                    <input type="text" name="person" value="{{ income.person or '' }}" list="income-persons" placeholder="Juan">
+                  </label>
+                  <button type="submit" class="btn btn-secondary">Save</button>
+                </form>
+                <form method="post"
+                      action="{{ url_for('delete_income', income_id=income.id) }}"
+                      class="inline-form expense-delete-form"
+                      onsubmit="return confirm('Delete this income entry permanently?');">
+                  <input type="hidden" name="filter_month" value="{{ month }}">
+                  <input type="hidden" name="filter_person" value="{{ person }}">
+                  <input type="hidden" name="filter_bucket_id" value="{{ bucket_id or '' }}">
+                  <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+              </details>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="5" data-label="Summary">Total</th>
+          <th class="num" data-label="Amount">${{ "%.2f"|format(total) }}</th>
+          <th></th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No income recorded for this filter.</p>
+    <p class="muted">
+      Set up <a href="{{ url_for('income_settings') }}">income buckets &amp; rules</a> and run a Gmail sync to import paychecks.
+    </p>
+  </div>
+{% endif %}
+{% endblock %}

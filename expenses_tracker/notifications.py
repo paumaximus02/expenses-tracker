@@ -16,6 +16,14 @@ def format_sync_result(result: dict[str, int]) -> tuple[str, str]:
         f"{result['pending']} pending review, "
         f"{result['skipped']} skipped."
     )
+    income_checked = result.get("income_checked", 0)
+    income_imported = result.get("income_imported", 0)
+    if income_checked or income_imported:
+        message += (
+            f" Income: {income_checked} message"
+            f"{'' if income_checked == 1 else 's'} checked, "
+            f"{income_imported} imported."
+        )
     return title, message
 
 

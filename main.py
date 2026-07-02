@@ -168,7 +168,7 @@ def sync_command(tenant_id: int) -> None:
     """Fetch new Gmail messages and import expenses."""
     _, sync = _build_services(tenant_id)
     result = sync.sync()
-    click.echo(
+    message = (
         "Sync complete: "
         f"{result['messages_checked']} messages checked, "
         f"{result['imported']} imported, "
@@ -176,6 +176,12 @@ def sync_command(tenant_id: int) -> None:
         f"{result['pending']} pending review, "
         f"{result['skipped']} skipped."
     )
+    if result.get("income_checked"):
+        message += (
+            f" Income: {result['income_checked']} messages checked, "
+            f"{result['income_imported']} imported."
+        )
+    click.echo(message)
 
 
 @cli.command("repair-dates")

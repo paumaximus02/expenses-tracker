@@ -9,6 +9,7 @@ from expenses_tracker.db import Database
 from expenses_tracker.delivery.dispatcher import NotificationDispatcher
 from expenses_tracker.email_parser import parse_gmail_message
 from expenses_tracker.gmail_client import GmailClient
+from expenses_tracker.income_parser import parse_income_message
 from expenses_tracker.models import ExpenseStatus, MatchType, Tenant
 from expenses_tracker.tenancy import global_db
 
@@ -94,6 +95,8 @@ class ExpenseSyncService:
                 imported_ids.append(expense_id)
                 imported += 1
 
+            income_result = self.sync_income()
+
             self.db.set_sync_value("last_sync_at", synced_at.isoformat())
             result = {
                 "messages_checked": len(messages),
@@ -102,6 +105,7 @@ class ExpenseSyncService:
                 "pending": pending,
                 "skipped": skipped,
                 "notification_id": None,
+                **income_result,
             }
             imported_expenses = [self.db.get_expense(expense_id) for expense_id in imported_ids]
             imported_expenses = [expense for expense in imported_expenses if expense is not None]
@@ -138,6 +142,51 @@ class ExpenseSyncService:
                 )
                 logger.info("Recorded sync failure notification %s", event.notification_id)
             raise
+
+    def sync_income(self) -> dict[str, int]:
+        """Import income from emails matching the household's income rules."""
+        query = (self.tenant.income_gmail_search_query or "").strip()
+        rules = self.db.list_income_rules()
+        if not query or not rules:
+            return {"income_checked": 0, "income_imported": 0, "income_skipped": 0}
+
+        messages = self.gmail.fetch_messages(query)
+        logger.info(
+            "Fetched %s Gmail messages for income query: %s",
+            len(messages),
+            query,
+        )
+        imported = 0
+        skipped = 0
+        for message in messages:
+            if self.db.income_exists(message["id"]):
+                skipped += 1
+                continue
+
+            parsed = parse_income_message(message, rules)
+            if parsed is None:
+                skipped += 1
+                continue
+
+            self.db.insert_income(
+                gmail_message_id=parsed.gmail_message_id,
+                received_date=parsed.received_date,
+                allocated_month=parsed.received_date.strftime("%Y-%m"),
+                source=parsed.description or parsed.rule.source_name,
+                amount=parsed.amount,
+                currency=parsed.currency,
+                bucket_id=parsed.rule.bucket_id,
+                person=parsed.rule.person,
+                email_subject=parsed.email_subject,
+                email_from=parsed.email_from,
+            )
+            imported += 1
+
+        return {
+            "income_checked": len(messages),
+            "income_imported": imported,
+            "income_skipped": skipped,
+        }
 
     def repair_card_holders(self) -> dict[str, int]:
         if not self.gmail.has_token():

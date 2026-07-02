@@ -31,6 +31,17 @@
           <span>Gmail search query</span>
           <input type="text" name="gmail_search_query" value="{{ tenant.gmail_search_query }}">
         </label>
+        <label class="field">
+          <span>Income Gmail search query</span>
+          <input type="text"
+                 name="income_gmail_search_query"
+                 value="{{ tenant.income_gmail_search_query }}"
+                 placeholder="from:(payroll.com) subject:(payment)">
+        </label>
+        <p class="settings-help">
+          Emails found by the income query are imported only when they match an
+          <a href="{{ url_for('income_settings') }}">income rule</a>.
+        </p>
         <button type="submit" class="btn btn-primary">Save settings</button>
       </form>
     </section>

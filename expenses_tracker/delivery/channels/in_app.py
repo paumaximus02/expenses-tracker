@@ -35,6 +35,8 @@ class InAppChannel:
                 "auto_assigned": event.auto_assigned,
                 "pending": event.pending,
                 "skipped": event.skipped,
+                "income_checked": event.income_checked,
+                "income_imported": event.income_imported,
             }
         )
         notification = self.db.create_notification(

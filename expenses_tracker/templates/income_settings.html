@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Income setup · Expenses Tracker{% endblock %}
+{% block content %}
+<section class="page-head page-head-row">
+  <div>
+    <h1>Income buckets &amp; rules</h1>
+    <p class="subtitle">Group income and match paycheck emails by the text they contain</p>
+  </div>
+  <a href="{{ url_for('income_page') }}" class="btn btn-secondary">Back to income</a>
+</section>
+
+{% if not income_gmail_search_query %}
+  <div class="flash flash-error">
+    No income Gmail search query is set yet. Add one in
+    <a href="{{ url_for('settings_page') }}">Settings</a> (e.g.
+    <code>from:(payroll.com) subject:(payment)</code>) so sync knows which emails to scan.
+  </div>
+{% endif %}
+
+<datalist id="income-persons">
+  {% for name in persons %}
+    <option value="{{ name }}"></option>
+  {% endfor %}
+</datalist>
+
+<div class="settings-grid">
+  <section class="panel">
+    <h2>Income buckets</h2>
+    <p class="settings-help">Buckets group income in reports, e.g. Salary, Bonus, Rental.</p>
+    <form method="post" action="{{ url_for('create_income_bucket') }}" class="inline-form">
+      <label class="field">
+        <span>Name</span>
+        <input type="text" name="name" placeholder="Salary" required>
+      </label>
+      <button type="submit" class="btn btn-primary">Add bucket</button>
+    </form>
+    {% if income_buckets %}
+      <div class="bucket-tree">
+        {% for bucket in income_buckets %}
+          <div class="bucket-row">
+            <div class="bucket-info">
+              <strong>{{ bucket.name }}</strong>
+            </div>
+            <details class="bucket-actions">
+              <summary>Edit</summary>
+              <form method="post" action="{{ url_for('edit_income_bucket', bucket_id=bucket.id) }}" class="inline-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input type="text" name="name" value="{{ bucket.name }}" required>
+                </label>
+                <button type="submit" class="btn btn-secondary">Save</button>
+              </form>
+              <form method="post" action="{{ url_for('delete_income_bucket', bucket_id=bucket.id) }}" class="inline-form">
+                <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this income bucket?')">Delete</button>
+              </form>
+            </details>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state"><p>No income buckets yet.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Income rules</h2>
+    <p class="settings-help">
+      When a synced email contains the match text, it is imported as income with this
+      bucket and person. The amount, date, and description (used as the income source)
+      are read from the email; the source name below is used when the email has no
+      description line.
+    </p>
+    <form method="post" action="{{ url_for('create_income_rule') }}" class="inline-form">
+      <label class="field">
+        <span>Email contains</span>
+        <input type="text" name="match_text" placeholder="ACME PAYROLL" required>
+      </label>
+      <label class="field">
+        <span>Source name</span>
+        <input type="text" name="source_name" placeholder="ACME salary">
+      </label>
+      <label class="field">
+        <span>Bucket</span>
+        <select name="bucket_id">
+          <option value="">Unassigned</option>
+          {% for bucket in income_buckets %}
+            <option value="{{ bucket.id }}">{{ bucket.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span>Person</span>
+        <input type="text" name="person" list="income-persons" placeholder="Juan">
+      </label>
+      <button type="submit" class="btn btn-primary">Add rule</button>
+    </form>
+
+    {% if income_rules %}
+      <div class="bucket-tree">
+        {% for rule in income_rules %}
+          <div class="bucket-row">
+            <div class="bucket-info">
+              <strong>{{ rule.source_name }}</strong>
+              <span class="muted">contains “{{ rule.match_text }}”</span>
+              <span class="pill">{{ rule.bucket_name or "Unassigned" }}</span>
+              {% if rule.person %}<span class="pill">{{ rule.person }}</span>{% endif %}
+            </div>
+            <details class="bucket-actions">
+              <summary>Edit</summary>
+              <form method="post" action="{{ url_for('update_income_rule', rule_id=rule.id) }}" class="inline-form">
+                <label class="field">
+                  <span>Email contains</span>
+                  <input type="text" name="match_text" value="{{ rule.match_text }}" required>
+                </label>
+                <label class="field">
+                  <span>Source name</span>
+                  <input type="text" name="source_name" value="{{ rule.source_name }}">
+                </label>
+                <label class="field">
+                  <span>Bucket</span>
+                  <select name="bucket_id">
+                    <option value="">Unassigned</option>
+                    {% for bucket in income_buckets %}
+                      <option value="{{ bucket.id }}" {% if rule.bucket_id == bucket.id %}selected{% endif %}>{{ bucket.name }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Person</span>
+                  <input type="text" name="person" value="{{ rule.person or '' }}" list="income-persons">
+                </label>
+                <button type="submit" class="btn btn-secondary">Save</button>
+              </form>
+              <form method="post" action="{{ url_for('delete_income_rule', rule_id=rule.id) }}" class="inline-form">
+                <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this income rule?')">Delete</button>
+              </form>
+            </details>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state"><p>No income rules yet. Add one above to start importing income.</p></div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

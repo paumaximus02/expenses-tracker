@@ -30,6 +30,8 @@ class SyncCompletedEvent:
     auto_assigned: int
     pending: int
     skipped: int
+    income_checked: int = 0
+    income_imported: int = 0
     notification_id: int | None = None
     error: str | None = None
     auto_assigned_transactions: list[SyncTransactionSummary] = field(default_factory=list)
@@ -82,6 +84,8 @@ def build_sync_completed_event(
         auto_assigned=result.get("auto_assigned", 0),
         pending=result.get("pending", 0),
         skipped=result.get("skipped", 0),
+        income_checked=result.get("income_checked", 0),
+        income_imported=result.get("income_imported", 0),
         notification_id=notification_id,
         error=error,
         auto_assigned_transactions=auto_assigned_transactions,

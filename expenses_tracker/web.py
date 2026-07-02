@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
@@ -37,6 +38,16 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 def _bucket_options(db, *, assignable_only: bool = False):
     tree = build_bucket_tree(db.list_buckets())
     return flatten_bucket_select_options(tree, assignable_only=assignable_only)
+
+
+def _income_persons(db, tenant) -> list[str]:
+    names = {name for name in tenant.card_holders.values() if name}
+    names.update(db.list_income_persons())
+    return sorted(names)
+
+
+def _valid_month(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value))
 
 
 def _safe_next_url(raw: str) -> str:
@@ -483,6 +494,164 @@ def create_app(settings: Settings | None = None) -> Flask:
             )
         )
 
+    @app.route("/income")
+    def income_page():
+        db, sync = _services()
+        month = request.args.get("month", app_month(settings))
+        person = request.args.get("person", "").strip()
+        bucket_id_raw = request.args.get("bucket_id", "").strip()
+        bucket_id = int(bucket_id_raw) if bucket_id_raw else None
+        incomes = db.list_incomes(
+            month=month or None,
+            person=person or None,
+            bucket_id=bucket_id,
+        )
+        income_buckets = db.list_income_buckets()
+        persons = _income_persons(db, sync.tenant)
+        total = sum(income.amount for income in incomes)
+        return render_template(
+            "income.html",
+            incomes=incomes,
+            income_buckets=income_buckets,
+            persons=persons,
+            month=month,
+            person=person,
+            bucket_id=bucket_id,
+            total=total,
+            page="income",
+        )
+
+    @app.post("/income/<int:income_id>/update")
+    def update_income(income_id: int):
+        db, _ = _services()
+        allocated_month = request.form.get("allocated_month", "").strip()
+        bucket_id_raw = request.form.get("bucket_id", "").strip()
+        person = request.form.get("person", "").strip()
+        redirect_kwargs = {
+            "month": request.form.get("filter_month", app_month(settings)),
+            "person": request.form.get("filter_person", "").strip() or None,
+            "bucket_id": request.form.get("filter_bucket_id", "").strip() or None,
+        }
+        try:
+            if not _valid_month(allocated_month):
+                raise ValueError("Allocated month must look like 2026-06.")
+            db.update_income(
+                income_id,
+                allocated_month=allocated_month,
+                bucket_id=int(bucket_id_raw) if bucket_id_raw else None,
+                person=person or None,
+            )
+            flash("Income updated.", "success")
+        except (ValueError, TypeError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_page", **redirect_kwargs))
+
+    @app.post("/income/<int:income_id>/delete")
+    def delete_income(income_id: int):
+        db, _ = _services()
+        redirect_kwargs = {
+            "month": request.form.get("filter_month", app_month(settings)),
+            "person": request.form.get("filter_person", "").strip() or None,
+            "bucket_id": request.form.get("filter_bucket_id", "").strip() or None,
+        }
+        try:
+            income = db.get_income(income_id)
+            if income is None:
+                raise ValueError(f"Income {income_id} not found.")
+            db.delete_income(income_id)
+            flash(f"Deleted income from {income.source}.", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_page", **redirect_kwargs))
+
+    @app.route("/income/settings")
+    def income_settings():
+        db, sync = _services()
+        income_buckets = db.list_income_buckets()
+        income_rules = db.list_income_rules()
+        persons = _income_persons(db, sync.tenant)
+        return render_template(
+            "income_settings.html",
+            income_buckets=income_buckets,
+            income_rules=income_rules,
+            persons=persons,
+            income_gmail_search_query=sync.tenant.income_gmail_search_query,
+            page="income",
+        )
+
+    @app.post("/income/buckets/create")
+    def create_income_bucket():
+        db, _ = _services()
+        try:
+            bucket = db.create_income_bucket(request.form.get("name", ""))
+            flash(f"Created income bucket '{bucket.name}'.", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_settings"))
+
+    @app.post("/income/buckets/<int:bucket_id>/edit")
+    def edit_income_bucket(bucket_id: int):
+        db, _ = _services()
+        try:
+            bucket = db.update_income_bucket(bucket_id, name=request.form.get("name", ""))
+            flash(f"Updated income bucket '{bucket.name}'.", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_settings"))
+
+    @app.post("/income/buckets/<int:bucket_id>/delete")
+    def delete_income_bucket(bucket_id: int):
+        db, _ = _services()
+        try:
+            db.delete_income_bucket(bucket_id)
+            flash("Income bucket deleted.", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_settings"))
+
+    @app.post("/income/rules/create")
+    def create_income_rule():
+        db, _ = _services()
+        bucket_id_raw = request.form.get("bucket_id", "").strip()
+        try:
+            rule = db.create_income_rule(
+                match_text=request.form.get("match_text", ""),
+                source_name=request.form.get("source_name", ""),
+                bucket_id=int(bucket_id_raw) if bucket_id_raw else None,
+                person=request.form.get("person", ""),
+            )
+            flash(f"Created income rule for '{rule.source_name}'.", "success")
+        except (ValueError, TypeError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_settings"))
+
+    @app.post("/income/rules/<int:rule_id>/update")
+    def update_income_rule(rule_id: int):
+        db, _ = _services()
+        bucket_id_raw = request.form.get("bucket_id", "").strip()
+        try:
+            rule = db.update_income_rule(
+                rule_id,
+                match_text=request.form.get("match_text", ""),
+                source_name=request.form.get("source_name", ""),
+                bucket_id=int(bucket_id_raw) if bucket_id_raw else None,
+                person=request.form.get("person", ""),
+            )
+            flash(f"Updated income rule for '{rule.source_name}'.", "success")
+        except (ValueError, TypeError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_settings"))
+
+    @app.post("/income/rules/<int:rule_id>/delete")
+    def delete_income_rule(rule_id: int):
+        db, _ = _services()
+        try:
+            db.delete_income_rule(rule_id)
+            flash("Income rule deleted.", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("income_settings"))
+
     @app.route("/groups")
     def groups():
         db, _ = _services()
@@ -613,7 +782,7 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.route("/report")
     def report():
-        db, _ = _services()
+        db, sync = _services()
         month = request.args.get("month", app_month(settings))
         person = request.args.get("person") or None
         totals = db.monthly_totals(month, card_holder=person)
@@ -629,12 +798,19 @@ def create_app(settings: Settings | None = None) -> Flask:
             for _bucket_id, bucket_name, total, _count in totals
             if total > 0
         ]
+        income_totals = db.monthly_income_totals(month, person=person)
+        income_total = sum(row[2] for row in income_totals)
+        income_count = sum(row[3] for row in income_totals)
+        income_person_totals = (
+            db.monthly_income_person_totals(month) if not person else []
+        )
         holders = sorted(
             {
                 expense.card_holder
                 for expense in db.list_expenses()
                 if expense.card_holder
             }
+            | set(_income_persons(db, sync.tenant))
         )
         return render_template(
             "report.html",
@@ -647,6 +823,11 @@ def create_app(settings: Settings | None = None) -> Flask:
             grand_total=grand_total,
             transaction_count=transaction_count,
             chart_slices=chart_slices,
+            income_totals=income_totals,
+            income_total=income_total,
+            income_count=income_count,
+            income_person_totals=income_person_totals,
+            net_total=income_total - grand_total,
             page="report",
         )
 
@@ -712,6 +893,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             name = request.form.get("household_name", "").strip()
             card_holders_raw = request.form.get("card_holders", "").strip()
             gmail_query = request.form.get("gmail_search_query", "").strip()
+            income_gmail_query = request.form.get("income_gmail_search_query", "").strip()
             holders = (
                 _parse_card_holders(card_holders_raw)
                 if card_holders_raw
@@ -723,6 +905,7 @@ def create_app(settings: Settings | None = None) -> Flask:
                 name=name or tenant.name,
                 card_holders=holders,
                 gmail_search_query=gmail_query or tenant.gmail_search_query,
+                income_gmail_search_query=income_gmail_query,
             )
             flash("Household settings saved.", "success")
             return redirect(url_for("settings_page"))
