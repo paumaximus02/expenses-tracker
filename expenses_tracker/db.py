@@ -1989,12 +1989,27 @@ class Database:
             return None
         return self._parse_db_datetime(value)
 
+    # A sync that has been "running" longer than this is assumed to have died
+    # (e.g. the process was restarted mid-sync) and its lock is ignored.
+    SYNC_LOCK_MAX_AGE = timedelta(minutes=10)
+
     def is_sync_in_progress(self) -> bool:
-        return self.get_sync_value("sync_in_progress") == "true"
+        value = self.get_sync_value("sync_in_progress")
+        if not value:
+            return False
+        try:
+            started_at = datetime.fromisoformat(value)
+        except ValueError:
+            # Legacy "true" markers carry no timestamp, so their age is
+            # unknowable; treat them as expired so a stuck lock self-heals.
+            return False
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - started_at <= self.SYNC_LOCK_MAX_AGE
 
     def set_sync_in_progress(self, in_progress: bool) -> None:
         if in_progress:
-            self.set_sync_value("sync_in_progress", "true")
+            self.set_sync_value("sync_in_progress", datetime.now(timezone.utc).isoformat())
         else:
             with self.connection() as conn:
                 conn.execute(
