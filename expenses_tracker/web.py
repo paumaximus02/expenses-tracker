@@ -105,6 +105,25 @@ def create_app(settings: Settings | None = None) -> Flask:
     def _tenant_id() -> int:
         return resolve_tenant_id(settings)
 
+    def _selected_month() -> str:
+        """Month filter for the current request, remembered across pages.
+
+        Picking a month on any page stores it in the session so the other
+        month-filtered pages open on the same month. An explicit empty month
+        (?month=) means "all months" for that view and is not persisted.
+        """
+        if "month" in request.args:
+            raw = request.args["month"].strip()
+            if not raw:
+                return ""
+            if _valid_month(raw):
+                session["selected_month"] = raw
+                return raw
+        stored = session.get("selected_month", "")
+        if stored and _valid_month(stored):
+            return stored
+        return app_month(settings)
+
     @app.context_processor
     def inject_helpers():
         auth_db = build_global_db(settings)
@@ -366,7 +385,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.route("/expenses")
     def expenses_page():
         db, _ = _services()
-        month = request.args.get("month", app_month(settings))
+        month = _selected_month()
         status_filter = request.args.get("status", "").strip()
         search = request.args.get("q", "").strip()
         person = request.args.get("person", "").strip()
@@ -497,7 +516,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.route("/income")
     def income_page():
         db, sync = _services()
-        month = request.args.get("month", app_month(settings))
+        month = _selected_month()
         person = request.args.get("person", "").strip()
         bucket_id_raw = request.args.get("bucket_id", "").strip()
         bucket_id = int(bucket_id_raw) if bucket_id_raw else None
@@ -790,7 +809,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.route("/report")
     def report():
         db, sync = _services()
-        month = request.args.get("month", app_month(settings))
+        month = _selected_month() or app_month(settings)
         person = request.args.get("person") or None
         totals = db.monthly_totals(month, card_holder=person)
         excluded_totals = db.monthly_excluded_totals(month, card_holder=person)
