@@ -330,11 +330,18 @@ class WithdrawalSyncTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _sync_service(self, messages: list[dict]):
+        from expenses_tracker.bucket_matcher import BucketMatcher
         from expenses_tracker.sync import ExpenseSyncService
 
         class StubGmail:
             def __init__(self, stubbed: list[dict]) -> None:
                 self.stubbed = stubbed
+
+            def has_token(self) -> bool:
+                return True
+
+            def authenticate(self) -> None:
+                pass
 
             def fetch_messages(self, query: str) -> list[dict]:
                 return self.stubbed
@@ -343,7 +350,7 @@ class WithdrawalSyncTests(unittest.TestCase):
             None,
             self.db,
             StubGmail(messages),
-            None,
+            BucketMatcher(self.db),
             tenant=self.tenant,
         )
 
@@ -409,6 +416,62 @@ class WithdrawalSyncTests(unittest.TestCase):
         expense = self.db.list_expenses()[0]
         self.assertIsNone(expense.bucket_id)
         self.assertEqual(expense.status, ExpenseStatus.PENDING)
+
+    GOLDMAN_BODY = (
+        "Greetings from LBS Financial Credit Union!\n\n"
+        "A transaction with amount larger than $1.00 just posted to your account "
+        "Checking **3231 - S:9.\n\n"
+        "Date: 7/3/2026\n"
+        "Description: Withdrawal-ACH-A-GOLDMAN SACHS BA WEBGOLDMAN SACHS BA (TRANSFER)\n"
+        "Note:\n"
+        "Amount: $5,052.01\n"
+        "Balance: $3,354.70.\n\n"
+        "Sincerely,\nLBS Financial Credit Union"
+    )
+
+    def test_bank_alert_in_main_query_uses_withdrawal_rule(self) -> None:
+        bucket = self.db.create_bucket("Investments")
+        self.db.create_income_rule(
+            match_text="GOLDMAN SACHS",
+            source_name="Goldman Sachs transfer",
+            direction="withdrawal",
+            expense_bucket_id=bucket.id,
+        )
+        message = _gmail_message(
+            message_id="msg-gs1",
+            subject="Transaction Alert",
+            body=self.GOLDMAN_BODY,
+        )
+        # The message arrives via the main expense query (and the income query
+        # returns it too); it must be imported once, through the rule.
+        result = self._sync_service([message]).sync(record_notification=False)
+
+        self.assertEqual(result["withdrawals_imported"], 1)
+        self.assertEqual(result["imported"], 0)
+        expenses = self.db.list_expenses()
+        self.assertEqual(len(expenses), 1)
+        self.assertEqual(expenses[0].merchant, "Goldman Sachs transfer")
+        self.assertEqual(expenses[0].amount, 5052.01)
+        self.assertEqual(expenses[0].transaction_date, date(2026, 7, 3))
+
+    def test_unmatched_bank_alert_is_not_imported_as_expense(self) -> None:
+        # A rule must exist for sync_income to scan, but it doesn't match.
+        self.db.create_income_rule(
+            match_text="CMG MORTGAGE",
+            source_name="CMG Mortgage",
+            direction="withdrawal",
+        )
+        message = _gmail_message(
+            message_id="msg-gs2",
+            subject="Transaction Alert",
+            body=self.GOLDMAN_BODY,
+        )
+        result = self._sync_service([message]).sync(record_notification=False)
+
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["withdrawals_imported"], 0)
+        self.assertEqual(len(self.db.list_expenses()), 0)
+        self.assertEqual(len(self.db.list_incomes()), 0)
 
     def test_deposit_rules_still_import_income(self) -> None:
         self.db.create_income_rule(

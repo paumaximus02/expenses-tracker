@@ -9,7 +9,7 @@ from expenses_tracker.db import Database
 from expenses_tracker.delivery.dispatcher import NotificationDispatcher
 from expenses_tracker.email_parser import parse_gmail_message
 from expenses_tracker.gmail_client import GmailClient
-from expenses_tracker.income_parser import parse_income_message
+from expenses_tracker.income_parser import is_bank_alert_message, parse_income_message
 from expenses_tracker.models import ExpenseStatus, MatchType, Tenant
 from expenses_tracker.tenancy import global_db
 
@@ -51,11 +51,18 @@ class ExpenseSyncService:
             pending = 0
             skipped = 0
             imported_ids: list[int] = []
+            bank_alerts: list[dict] = []
 
             for message in messages:
                 message_id = message["id"]
                 if self.db.expense_exists(message_id):
                     skipped += 1
+                    continue
+
+                if is_bank_alert_message(message):
+                    # Bank ACH alerts are handled by the income/withdrawal
+                    # rules, never by the card-expense parser.
+                    bank_alerts.append(message)
                     continue
 
                 parsed = parse_gmail_message(message, card_holders=self.tenant.card_holders)
@@ -95,7 +102,7 @@ class ExpenseSyncService:
                 imported_ids.append(expense_id)
                 imported += 1
 
-            income_result = self.sync_income()
+            income_result = self.sync_income(extra_messages=bank_alerts)
             withdrawal_ids = income_result.pop("withdrawal_expense_ids", [])
             imported_ids.extend(withdrawal_ids)
 
@@ -145,10 +152,12 @@ class ExpenseSyncService:
                 logger.info("Recorded sync failure notification %s", event.notification_id)
             raise
 
-    def sync_income(self) -> dict[str, object]:
+    def sync_income(self, *, extra_messages: list[dict] | None = None) -> dict[str, object]:
         """Import bank emails matching the household's income/withdrawal rules.
 
         Deposit rules create income entries; withdrawal rules create expenses.
+        ``extra_messages`` are bank alerts found by the main expense query that
+        should be handled by the same rules.
         """
         empty: dict[str, object] = {
             "income_checked": 0,
@@ -159,15 +168,24 @@ class ExpenseSyncService:
         }
         query = (self.tenant.income_gmail_search_query or "").strip()
         rules = self.db.list_income_rules()
-        if not query or not rules:
+        if not rules:
             return empty
 
-        messages = self.gmail.fetch_messages(query)
-        logger.info(
-            "Fetched %s Gmail messages for income query: %s",
-            len(messages),
-            query,
-        )
+        messages: list[dict] = []
+        if query:
+            messages = self.gmail.fetch_messages(query)
+            logger.info(
+                "Fetched %s Gmail messages for income query: %s",
+                len(messages),
+                query,
+            )
+        if extra_messages:
+            seen_ids = {message["id"] for message in messages}
+            messages.extend(
+                message for message in extra_messages if message["id"] not in seen_ids
+            )
+        if not messages:
+            return empty
         imported = 0
         skipped = 0
         withdrawal_expense_ids: list[int] = []

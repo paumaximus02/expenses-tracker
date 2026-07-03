@@ -38,6 +38,22 @@ INCOME_DESCRIPTION_PATTERNS = [
     ),
 ]
 
+# Bank transaction alerts (e.g. LBS FCU) carry a "Description: Withdrawal-..."
+# or "Description: Deposit-..." line. They must never fall through to the
+# generic card-expense parser, which extracts garbage from them (the greeting
+# line becomes the merchant).
+BANK_ALERT_PATTERN = re.compile(r"description\s*[:\-]\s*(?:withdrawal|deposit)\b", re.I)
+
+
+def is_bank_alert_message(message: dict) -> bool:
+    headers = {
+        header["name"].lower(): header["value"]
+        for header in message.get("payload", {}).get("headers", [])
+    }
+    subject = headers.get("subject", "")
+    body_text = _decode_body(message.get("payload", {}))
+    return bool(BANK_ALERT_PATTERN.search(f"{subject}\n{body_text}"))
+
 
 def parse_income_amount(text: str) -> float | None:
     clean_text = text
