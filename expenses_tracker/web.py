@@ -27,6 +27,13 @@ from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
 from expenses_tracker.notifications import format_notification_time, notification_to_dict
+from expenses_tracker.email_import import (
+    build_context,
+    format_sample_display,
+    highlight_match,
+    preview_email_query,
+    sample_body_text,
+)
 from expenses_tracker.scheduled_sync import run_scheduled_sync_all
 from expenses_tracker.services import build_global_db, build_services
 from expenses_tracker.tenancy import resolve_tenant_id
@@ -267,11 +274,21 @@ def create_app(settings: Settings | None = None) -> Flask:
                 return redirect(url_for("review_sync", notification_id=int(sync_notification_id)))
             return redirect(url_for("review"))
         try:
-            sync.confirm_expense_by_id(expense_id, int(bucket_id_raw), create_rule=create_rule)
+            batch_updated = sync.confirm_expense_by_id(
+                expense_id,
+                int(bucket_id_raw),
+                create_rule=create_rule,
+            )
             db, _ = _services()
             bucket = db.get_bucket(int(bucket_id_raw))
             label = bucket.display_path if bucket else "bucket"
-            flash(f"Assigned to {label}.", "success")
+            message = f"Assigned to {label}."
+            if batch_updated:
+                message += (
+                    f" {batch_updated} similar pending expense"
+                    f"{'' if batch_updated == 1 else 's'} updated."
+                )
+            flash(message, "success")
         except (ValueError, TypeError) as exc:
             flash(str(exc), "error")
         if redirect_target == "sync_review" and sync_notification_id:
@@ -587,15 +604,11 @@ def create_app(settings: Settings | None = None) -> Flask:
     def income_settings():
         db, sync = _services()
         income_buckets = db.list_income_buckets()
-        income_rules = db.list_income_rules()
         persons = _income_persons(db, sync.tenant)
         return render_template(
             "income_settings.html",
             income_buckets=income_buckets,
-            income_rules=income_rules,
-            expense_bucket_options=_bucket_options(db, assignable_only=True),
             persons=persons,
-            income_gmail_search_query=sync.tenant.income_gmail_search_query,
             page="income",
         )
 
@@ -677,6 +690,191 @@ def create_app(settings: Settings | None = None) -> Flask:
         except ValueError as exc:
             flash(str(exc), "error")
         return redirect(url_for("income_settings"))
+
+    def _email_query_form(form) -> dict:
+        def _opt_int(name: str) -> int | None:
+            raw = form.get(name, "").strip()
+            return int(raw) if raw else None
+
+        kind = form.get("kind", "expense")
+        person_mode = form.get("person_mode", "fixed").strip().lower() or "fixed"
+        if kind == "income":
+            person_mode = "fixed"
+        return {
+            "name": form.get("name", ""),
+            "query": form.get("query", ""),
+            "kind": kind,
+            "match_text": form.get("match_text", ""),
+            "from_pattern": form.get("from_pattern", ""),
+            "merchant_label": form.get("merchant_label", ""),
+            "merchant_name": form.get("merchant_name", ""),
+            "amount_label": form.get("amount_label", ""),
+            "expense_bucket_id": _opt_int("expense_bucket_id"),
+            "income_bucket_id": _opt_int("income_bucket_id"),
+            "person": form.get("person", ""),
+            "person_mode": person_mode,
+        }
+
+    def _email_query_from_form(form, *, enabled: bool = True) -> dict:
+        payload = _email_query_form(form)
+        payload["enabled"] = enabled
+        return payload
+
+    def _sample_payload(sync, db, *, query: str, email_query_kwargs: dict) -> dict:
+        from expenses_tracker.models import EmailQuery
+
+        if not sync.gmail.has_token():
+            raise ValueError("Connect Gmail in Settings before loading a sample email.")
+        sync.gmail.authenticate()
+        messages = sync.gmail.fetch_messages(query.strip(), max_results=1)
+        if not messages:
+            raise ValueError("No emails matched that Gmail search query.")
+
+        context = build_context(messages[0])
+        preview_query = EmailQuery(
+            id=0,
+            name=email_query_kwargs.get("name", "Preview"),
+            query=query.strip(),
+            enabled=True,
+            kind=email_query_kwargs.get("kind", "expense"),
+            match_text=email_query_kwargs.get("match_text", ""),
+            from_pattern=email_query_kwargs.get("from_pattern") or None,
+            merchant_label=email_query_kwargs.get("merchant_label") or None,
+            merchant_name=email_query_kwargs.get("merchant_name") or None,
+            amount_label=email_query_kwargs.get("amount_label") or None,
+            expense_bucket_id=email_query_kwargs.get("expense_bucket_id"),
+            income_bucket_id=email_query_kwargs.get("income_bucket_id"),
+            person=email_query_kwargs.get("person") or None,
+            person_mode=email_query_kwargs.get("person_mode", "fixed"),
+        )
+        preview = preview_email_query(
+            context,
+            preview_query,
+            card_holders=sync.tenant.card_holders,
+        )
+        display_body = format_sample_display(context)
+        match_text = preview_query.match_text
+        return {
+            "sender": context.sender,
+            "subject": context.subject,
+            "body": sample_body_text(context),
+            "sender_html": str(highlight_match(context.sender, match_text)),
+            "subject_html": str(highlight_match(context.subject, match_text)),
+            "body_html": str(highlight_match(display_body, match_text)),
+            "preview": {
+                "kind": preview.kind,
+                "kind_label": preview.kind_label,
+                "merchant": preview.merchant,
+                "amount": preview.amount,
+                "date": preview.date,
+                "matched": preview.matched,
+                "note": preview.note,
+                "card_holder": preview.card_holder,
+                "card_last_four": preview.card_last_four,
+            },
+        }
+
+    @app.route("/email-setup")
+    def email_setup():
+        db, sync = _services()
+        edit_id_raw = request.args.get("edit", "").strip()
+        edit_query = None
+        if edit_id_raw.isdigit():
+            edit_query = db.get_email_query(int(edit_id_raw))
+        return render_template(
+            "email_setup.html",
+            queries=db.list_email_queries(),
+            edit_query=edit_query,
+            expense_bucket_options=_bucket_options(db, assignable_only=True),
+            income_buckets=db.list_income_buckets(),
+            persons=_income_persons(db, sync.tenant),
+            card_holders_text=",".join(
+                f"{last_four}:{name}"
+                for last_four, name in sorted(sync.tenant.card_holders.items())
+            ),
+            page="email_setup",
+        )
+
+    @app.post("/email-setup/queries/create")
+    def create_email_query():
+        db, _ = _services()
+        try:
+            query = db.create_email_query(**_email_query_from_form(request.form))
+            flash(f"Created query '{query.name}'.", "success")
+            return redirect(url_for("email_setup", edit=query.id))
+        except (ValueError, TypeError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("email_setup"))
+
+    @app.post("/email-setup/queries/<int:query_id>/update")
+    def update_email_query(query_id: int):
+        db, _ = _services()
+        try:
+            query = db.update_email_query(
+                query_id,
+                enabled=request.form.get("enabled") == "on",
+                **_email_query_form(request.form),
+            )
+            flash(f"Updated query '{query.name}'.", "success")
+            return redirect(url_for("email_setup", edit=query.id))
+        except (ValueError, TypeError) as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("email_setup", edit=query_id))
+
+    @app.post("/email-setup/queries/<int:query_id>/delete")
+    def delete_email_query(query_id: int):
+        db, _ = _services()
+        try:
+            db.delete_email_query(query_id)
+            flash("Query deleted.", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("email_setup"))
+
+    @app.get("/email-setup/queries/<int:query_id>/sample")
+    def email_query_sample(query_id: int):
+        db, sync = _services()
+        email_query = db.get_email_query(query_id)
+        if email_query is None:
+            return jsonify({"error": "Query not found."}), 404
+        overrides = _email_query_form(request.args)
+        kwargs = {
+            "name": overrides.get("name") or email_query.name,
+            "kind": overrides.get("kind") or email_query.kind,
+            "match_text": overrides.get("match_text") or email_query.match_text,
+            "from_pattern": overrides.get("from_pattern") or email_query.from_pattern,
+            "merchant_label": overrides.get("merchant_label") or email_query.merchant_label,
+            "merchant_name": overrides.get("merchant_name") or email_query.merchant_name,
+            "amount_label": overrides.get("amount_label") or email_query.amount_label,
+            "expense_bucket_id": overrides.get("expense_bucket_id") or email_query.expense_bucket_id,
+            "income_bucket_id": overrides.get("income_bucket_id") or email_query.income_bucket_id,
+            "person": overrides.get("person") or email_query.person,
+            "person_mode": overrides.get("person_mode") or email_query.person_mode,
+        }
+        try:
+            payload = _sample_payload(
+                sync,
+                db,
+                query=overrides.get("query") or email_query.query,
+                email_query_kwargs=kwargs,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(payload)
+
+    @app.post("/email-setup/sample")
+    def email_query_sample_draft():
+        _, sync = _services()
+        try:
+            payload = _sample_payload(
+                sync,
+                None,
+                query=request.form.get("query", ""),
+                email_query_kwargs=_email_query_form(request.form),
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(payload)
 
     @app.route("/groups")
     def groups():
@@ -907,6 +1105,30 @@ def create_app(settings: Settings | None = None) -> Flask:
             redirect_kwargs["page"] = int(page)
         return redirect(url_for("rules", **redirect_kwargs))
 
+    @app.post("/rules/<int:rule_id>/delete")
+    def delete_rule(rule_id: int):
+        db, _ = _services()
+        search = request.form.get("q", "").strip()
+        page = request.form.get("page", "1").strip()
+        try:
+            rule = db.get_merchant_rule(rule_id)
+            if rule is None:
+                raise ValueError(f"Merchant rule {rule_id} not found.")
+            db.delete_merchant_rule(rule_id)
+            flash(
+                f"Deleted rule for {format_merchant(rule.merchant_pattern)}. "
+                "Future expenses from this merchant will need review unless a new rule is created.",
+                "success",
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+        redirect_kwargs: dict[str, str | int] = {}
+        if search:
+            redirect_kwargs["q"] = search
+        if page.isdigit() and int(page) > 1:
+            redirect_kwargs["page"] = int(page)
+        return redirect(url_for("rules", **redirect_kwargs))
+
     @app.route("/settings", methods=["GET", "POST"])
     def settings_page():
         db, sync = _services()
@@ -918,8 +1140,6 @@ def create_app(settings: Settings | None = None) -> Flask:
 
             name = request.form.get("household_name", "").strip()
             card_holders_raw = request.form.get("card_holders", "").strip()
-            gmail_query = request.form.get("gmail_search_query", "").strip()
-            income_gmail_query = request.form.get("income_gmail_search_query", "").strip()
             holders = (
                 _parse_card_holders(card_holders_raw)
                 if card_holders_raw
@@ -930,8 +1150,6 @@ def create_app(settings: Settings | None = None) -> Flask:
                 tenant.id,
                 name=name or tenant.name,
                 card_holders=holders,
-                gmail_search_query=gmail_query or tenant.gmail_search_query,
-                income_gmail_search_query=income_gmail_query,
             )
             flash("Household settings saved.", "success")
             return redirect(url_for("settings_page"))

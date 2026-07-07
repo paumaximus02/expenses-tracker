@@ -186,6 +186,53 @@ def sync_command(tenant_id: int) -> None:
     click.echo(message)
 
 
+@cli.command("reset-import-state")
+@_tenant_option()
+@click.option("--dry-run", is_flag=True, help="Print what would be deleted without changing the database.")
+def reset_import_state_command(tenant_id: int, dry_run: bool) -> None:
+    """Clear imported transactions and rules; keep users and buckets."""
+    auth_db = build_global_db()
+    tenant = auth_db.get_tenant(tenant_id)
+    if tenant is None:
+        raise click.ClickException(f"Tenant {tenant_id} not found.")
+
+    tables = (
+        "expenses",
+        "incomes",
+        "notifications",
+        "sync_state",
+        "merchant_rules",
+        "income_rules",
+        "dismissed_merchant_groups",
+    )
+    if dry_run:
+        click.echo(f"Dry run for tenant {tenant_id} ({tenant.name}):")
+        with auth_db.connection() as conn:
+            for table in tables:
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS count FROM {table} WHERE tenant_id = ?",
+                    (tenant_id,),
+                ).fetchone()
+                click.echo(f"  {table}: {row['count']} row(s) would be deleted")
+            bucket_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM buckets WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchone()["count"]
+            user_count = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
+        click.echo(f"  buckets: {bucket_count} row(s) kept")
+        click.echo(f"  users: {user_count} row(s) kept")
+        click.echo("  email_queries: kept (import configuration preserved)")
+        click.echo("  tenants.gmail_search_query and income_gmail_search_query would be cleared")
+        return
+
+    counts = auth_db.reset_import_state(tenant_id)
+    click.echo(f"Reset import state for tenant {tenant_id} ({tenant.name}):")
+    for table, deleted in counts.items():
+        click.echo(f"  {table}: {deleted} deleted")
+    click.echo("Email queries kept. Legacy Gmail query fields cleared. Users and buckets unchanged.")
+    click.echo("Next: review Email queries, then sync.")
+
+
 @cli.command("repair-dates")
 @_tenant_option()
 def repair_dates_command(tenant_id: int) -> None:
@@ -242,8 +289,14 @@ def review_command(limit: int, tenant_id: int) -> None:
 def confirm_command(expense_id: int, bucket_name: str, no_rule: bool, tenant_id: int) -> None:
     """Confirm one expense bucket and optionally teach a merchant rule."""
     _, sync = _build_services(tenant_id)
-    sync.confirm_expense(expense_id, bucket_name, create_rule=not no_rule)
-    click.echo(f"Expense {expense_id} assigned to '{bucket_name}'.")
+    batch_updated = sync.confirm_expense(expense_id, bucket_name, create_rule=not no_rule)
+    message = f"Expense {expense_id} assigned to '{bucket_name}'."
+    if batch_updated:
+        message += (
+            f" {batch_updated} similar pending expense"
+            f"{'' if batch_updated == 1 else 's'} updated."
+        )
+    click.echo(message)
 
 
 @cli.command("analyze")

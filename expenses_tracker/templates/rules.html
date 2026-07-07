@@ -59,6 +59,14 @@
                   </label>
                   <button type="submit" class="btn btn-secondary">Save</button>
                 </form>
+                <form method="post" action="{{ url_for('delete_rule', rule_id=rule.id) }}" class="inline-form">
+                  <input type="hidden" name="q" value="{{ search }}">
+                  <input type="hidden" name="page" value="{{ current_page }}">
+                  <button type="submit" class="btn btn-danger"
+                          onclick="return confirm('Delete this merchant rule? Future expenses from this merchant will not auto-assign.')">
+                    Delete
+                  </button>
+                </form>
               </details>
             </td>
           </tr>

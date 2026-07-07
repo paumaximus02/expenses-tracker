@@ -7,9 +7,9 @@ from expenses_tracker.bucket_matcher import BucketMatcher, normalize_merchant
 from expenses_tracker.config import Settings
 from expenses_tracker.db import Database
 from expenses_tracker.delivery.dispatcher import NotificationDispatcher
+from expenses_tracker.email_import import apply_email_query, build_context, query_matches
 from expenses_tracker.email_parser import parse_gmail_message
 from expenses_tracker.gmail_client import GmailClient
-from expenses_tracker.income_parser import is_bank_alert_message, parse_income_message
 from expenses_tracker.models import ExpenseStatus, MatchType, Tenant
 from expenses_tracker.tenancy import global_db
 
@@ -38,84 +38,11 @@ class ExpenseSyncService:
         synced_at = datetime.now(timezone.utc)
         try:
             self.gmail.authenticate()
-            messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
-            rules = self.matcher.reload_rules()
-            logger.info(
-                "Fetched %s Gmail messages for query: %s",
-                len(messages),
-                self.tenant.gmail_search_query,
-            )
-
-            imported = 0
-            auto_assigned = 0
-            pending = 0
-            skipped = 0
-            imported_ids: list[int] = []
-            bank_alerts: list[dict] = []
-
-            for message in messages:
-                message_id = message["id"]
-                if self.db.expense_exists(message_id):
-                    skipped += 1
-                    continue
-
-                if is_bank_alert_message(message):
-                    # Bank ACH alerts are handled by the income/withdrawal
-                    # rules, never by the card-expense parser.
-                    bank_alerts.append(message)
-                    continue
-
-                parsed = parse_gmail_message(message, card_holders=self.tenant.card_holders)
-                if parsed is None:
-                    skipped += 1
-                    continue
-
-                matched_rule = self.matcher.match(parsed.merchant, rules)
-                suggested_bucket_id = None
-                status = ExpenseStatus.PENDING
-
-                if matched_rule:
-                    bucket_id = matched_rule.bucket_id
-                    suggested_bucket_id = matched_rule.bucket_id
-                    status = ExpenseStatus.AUTO if matched_rule.confirmed_by_user else ExpenseStatus.CONFIRMED
-                    auto_assigned += 1
-                else:
-                    bucket_id = None
-                    suggested_bucket_id, _ = self.matcher.suggest_bucket(parsed.merchant, rules)
-                    pending += 1
-
-                expense_id = self.db.insert_expense(
-                    gmail_message_id=parsed.gmail_message_id,
-                    transaction_date=parsed.transaction_date,
-                    merchant=parsed.merchant,
-                    merchant_normalized=normalize_merchant(parsed.merchant),
-                    amount=parsed.amount,
-                    currency=parsed.currency,
-                    bucket_id=bucket_id,
-                    suggested_bucket_id=suggested_bucket_id,
-                    status=status,
-                    email_subject=parsed.email_subject,
-                    email_from=parsed.email_from,
-                    card_last_four=parsed.card_last_four,
-                    card_holder=parsed.card_holder,
-                )
-                imported_ids.append(expense_id)
-                imported += 1
-
-            income_result = self.sync_income(extra_messages=bank_alerts)
-            withdrawal_ids = income_result.pop("withdrawal_expense_ids", [])
-            imported_ids.extend(withdrawal_ids)
-
+            result = self.sync_email_queries()
             self.db.set_sync_value("last_sync_at", synced_at.isoformat())
-            result = {
-                "messages_checked": len(messages),
-                "imported": imported,
-                "auto_assigned": auto_assigned,
-                "pending": pending,
-                "skipped": skipped,
-                "notification_id": None,
-                **income_result,
-            }
+            imported_ids = result.pop("expense_ids", [])
+            result["notification_id"] = None
+
             imported_expenses = [self.db.get_expense(expense_id) for expense_id in imported_ids]
             imported_expenses = [expense for expense in imported_expenses if expense is not None]
 
@@ -152,103 +79,119 @@ class ExpenseSyncService:
                 logger.info("Recorded sync failure notification %s", event.notification_id)
             raise
 
-    def sync_income(self, *, extra_messages: list[dict] | None = None) -> dict[str, object]:
-        """Import bank emails matching the household's income/withdrawal rules.
-
-        Deposit rules create income entries; withdrawal rules create expenses.
-        ``extra_messages`` are bank alerts found by the main expense query that
-        should be handled by the same rules.
-        """
+    def sync_email_queries(self) -> dict[str, object]:
+        """Import emails for each enabled query using its field configuration."""
         empty: dict[str, object] = {
+            "messages_checked": 0,
+            "imported": 0,
+            "auto_assigned": 0,
+            "pending": 0,
+            "skipped": 0,
             "income_checked": 0,
             "income_imported": 0,
             "income_skipped": 0,
             "withdrawals_imported": 0,
-            "withdrawal_expense_ids": [],
+            "expense_ids": [],
         }
-        query = (self.tenant.income_gmail_search_query or "").strip()
-        rules = self.db.list_income_rules()
-        if not rules:
+        queries = self.db.list_email_queries(enabled_only=True)
+        if not queries:
+            logger.info("Skipping email import: no enabled email queries configured")
             return empty
 
-        messages: list[dict] = []
-        if query:
-            messages = self.gmail.fetch_messages(query)
-            logger.info(
-                "Fetched %s Gmail messages for income query: %s",
-                len(messages),
-                query,
-            )
-        if extra_messages:
-            seen_ids = {message["id"] for message in messages}
-            messages.extend(
-                message for message in extra_messages if message["id"] not in seen_ids
-            )
-        if not messages:
-            return empty
+        messages_checked = 0
         imported = 0
+        auto_assigned = 0
+        pending = 0
         skipped = 0
-        withdrawal_expense_ids: list[int] = []
-        for message in messages:
-            message_id = message["id"]
-            if self.db.income_exists(message_id) or self.db.expense_exists(message_id):
-                skipped += 1
-                continue
+        income_imported = 0
+        withdrawals_imported = 0
+        expense_ids: list[int] = []
+        seen_ids: set[str] = set()
 
-            parsed = parse_income_message(message, rules)
-            if parsed is None:
-                skipped += 1
-                continue
-
-            if parsed.rule.direction == "withdrawal":
-                merchant = parsed.rule.source_name
-                bucket_id = parsed.rule.expense_bucket_id
-                expense_id = self.db.insert_expense(
-                    gmail_message_id=parsed.gmail_message_id,
-                    transaction_date=parsed.received_date,
-                    merchant=merchant,
-                    merchant_normalized=normalize_merchant(merchant),
-                    amount=parsed.amount,
-                    currency=parsed.currency,
-                    bucket_id=bucket_id,
-                    suggested_bucket_id=bucket_id,
-                    status=ExpenseStatus.AUTO if bucket_id else ExpenseStatus.PENDING,
-                    email_subject=parsed.email_subject,
-                    email_from=parsed.email_from,
-                    card_last_four=None,
-                    card_holder=parsed.rule.person,
+        for email_query in queries:
+            if not (email_query.match_text or "").strip():
+                logger.info(
+                    "Skipping query '%s': match text not configured yet",
+                    email_query.name,
                 )
-                withdrawal_expense_ids.append(expense_id)
                 continue
 
-            self.db.insert_income(
-                gmail_message_id=parsed.gmail_message_id,
-                received_date=parsed.received_date,
-                allocated_month=parsed.received_date.strftime("%Y-%m"),
-                source=parsed.description or parsed.rule.source_name,
-                amount=parsed.amount,
-                currency=parsed.currency,
-                bucket_id=parsed.rule.bucket_id,
-                person=parsed.rule.person,
-                email_subject=parsed.email_subject,
-                email_from=parsed.email_from,
+            messages = self.gmail.fetch_messages(email_query.query)
+            logger.info(
+                "Fetched %s Gmail messages for query '%s'",
+                len(messages),
+                email_query.name,
             )
-            imported += 1
+            for message in messages:
+                message_id = message["id"]
+                if message_id in seen_ids:
+                    continue
+                seen_ids.add(message_id)
+                if self.db.expense_exists(message_id) or self.db.income_exists(message_id):
+                    skipped += 1
+                    continue
+
+                messages_checked += 1
+                context = build_context(message)
+                if not query_matches(context, email_query):
+                    skipped += 1
+                    continue
+
+                outcome, record_id = apply_email_query(
+                    self.db,
+                    context,
+                    email_query,
+                    card_holders=self.tenant.card_holders,
+                    matcher=self.matcher,
+                )
+                if outcome == "unparsed" or record_id is None:
+                    skipped += 1
+                    continue
+
+                if outcome == "income":
+                    income_imported += 1
+                    continue
+
+                expense_ids.append(record_id)
+                imported += 1
+                if email_query.kind == "withdrawal":
+                    withdrawals_imported += 1
+
+                expense = self.db.get_expense(record_id)
+                if expense is None:
+                    continue
+                if expense.status == ExpenseStatus.PENDING:
+                    pending += 1
+                else:
+                    auto_assigned += 1
 
         return {
-            "income_checked": len(messages),
-            "income_imported": imported,
+            "messages_checked": messages_checked,
+            "imported": imported,
+            "auto_assigned": auto_assigned,
+            "pending": pending,
+            "skipped": skipped,
+            "income_checked": messages_checked,
+            "income_imported": income_imported,
             "income_skipped": skipped,
-            "withdrawals_imported": len(withdrawal_expense_ids),
-            "withdrawal_expense_ids": withdrawal_expense_ids,
+            "withdrawals_imported": withdrawals_imported,
+            "expense_ids": expense_ids,
         }
+
+    def _fetch_messages_for_repair(self) -> dict[str, dict]:
+        messages_by_id: dict[str, dict] = {}
+        for email_query in self.db.list_email_queries(enabled_only=True):
+            if email_query.kind != "expense":
+                continue
+            for message in self.gmail.fetch_messages(email_query.query):
+                messages_by_id[message["id"]] = message
+        return messages_by_id
 
     def repair_card_holders(self) -> dict[str, int]:
         if not self.gmail.has_token():
             raise RuntimeError("Gmail is not connected for this household. Connect Gmail in Settings.")
         self.gmail.authenticate()
-        messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
-        messages_by_id = {message["id"]: message for message in messages}
+        messages_by_id = self._fetch_messages_for_repair()
 
         updated = 0
         unchanged = 0
@@ -260,7 +203,7 @@ class ExpenseSyncService:
                 missing += 1
                 continue
 
-            parsed = parse_gmail_message(message, card_holders=self.settings.card_holders)
+            parsed = parse_gmail_message(message, card_holders=self.tenant.card_holders)
             if parsed is None:
                 missing += 1
                 continue
@@ -280,7 +223,7 @@ class ExpenseSyncService:
             updated += 1
 
         return {
-            "messages_checked": len(messages),
+            "messages_checked": len(messages_by_id),
             "updated": updated,
             "unchanged": unchanged,
             "missing": missing,
@@ -290,8 +233,7 @@ class ExpenseSyncService:
         if not self.gmail.has_token():
             raise RuntimeError("Gmail is not connected for this household. Connect Gmail in Settings.")
         self.gmail.authenticate()
-        messages = self.gmail.fetch_messages(self.tenant.gmail_search_query)
-        messages_by_id = {message["id"]: message for message in messages}
+        messages_by_id = self._fetch_messages_for_repair()
 
         updated = 0
         unchanged = 0
@@ -316,29 +258,35 @@ class ExpenseSyncService:
             updated += 1
 
         return {
-            "messages_checked": len(messages),
+            "messages_checked": len(messages_by_id),
             "updated": updated,
             "unchanged": unchanged,
             "missing": missing,
         }
 
-    def confirm_expense(self, expense_id: int, bucket_name: str, create_rule: bool = True) -> None:
+    def _confirm_matching_pending(
+        self,
+        merchant: str,
+        bucket_id: int,
+        *,
+        exclude_id: int | None = None,
+    ) -> int:
+        """Confirm pending expenses with the same normalized merchant. Returns count updated."""
+        target = normalize_merchant(merchant)
+        updated = 0
+        for expense in self.db.list_expenses(status=ExpenseStatus.PENDING):
+            if exclude_id is not None and expense.id == exclude_id:
+                continue
+            if normalize_merchant(expense.merchant) == target:
+                self.db.confirm_expense(expense.id, bucket_id)
+                updated += 1
+        return updated
+
+    def confirm_expense(self, expense_id: int, bucket_name: str, create_rule: bool = True) -> int:
         bucket = self.db.resolve_bucket_reference(bucket_name)
+        return self.confirm_expense_by_id(expense_id, bucket.id, create_rule=create_rule)
 
-        expense = self.db.get_expense(expense_id)
-        if expense is None:
-            raise ValueError(f"Expense {expense_id} not found")
-
-        self.db.confirm_expense(expense_id, bucket.id)
-        if create_rule:
-            self.db.upsert_merchant_rule(
-                merchant_pattern=expense.merchant,
-                bucket_id=bucket.id,
-                match_type=MatchType.EXACT,
-                confirmed_by_user=True,
-            )
-
-    def confirm_expense_by_id(self, expense_id: int, bucket_id: int, create_rule: bool = True) -> None:
+    def confirm_expense_by_id(self, expense_id: int, bucket_id: int, create_rule: bool = True) -> int:
         bucket = self.db.get_bucket(bucket_id)
         if bucket is None:
             raise ValueError(f"Bucket {bucket_id} not found")
@@ -348,6 +296,7 @@ class ExpenseSyncService:
             raise ValueError(f"Expense {expense_id} not found")
 
         self.db.confirm_expense(expense_id, bucket.id)
+        batch_updated = 0
         if create_rule:
             self.db.upsert_merchant_rule(
                 merchant_pattern=expense.merchant,
@@ -355,6 +304,12 @@ class ExpenseSyncService:
                 match_type=MatchType.EXACT,
                 confirmed_by_user=True,
             )
+            batch_updated = self._confirm_matching_pending(
+                expense.merchant,
+                bucket.id,
+                exclude_id=expense_id,
+            )
+        return batch_updated
 
     def apply_group_suggestion(
         self,
@@ -383,8 +338,5 @@ class ExpenseSyncService:
                 match_type=match_type,
                 confirmed_by_user=True,
             )
-            for expense in self.db.list_expenses(status=ExpenseStatus.PENDING):
-                if normalize_merchant(expense.merchant) == normalize_merchant(merchant):
-                    self.db.confirm_expense(expense.id, bucket.id)
-                    updated += 1
+            updated += self._confirm_matching_pending(merchant, bucket.id)
         return updated

@@ -3,19 +3,16 @@
 {% block content %}
 <section class="page-head page-head-row">
   <div>
-    <h1>Income buckets &amp; rules</h1>
-    <p class="subtitle">Group income and match paycheck emails by the text they contain</p>
+    <h1>Income buckets</h1>
+    <p class="subtitle">Group income in reports. Bank deposit and withdrawal imports are configured on Email queries.</p>
   </div>
   <a href="{{ url_for('income_page') }}" class="btn btn-secondary">Back to income</a>
 </section>
 
-{% if not income_gmail_search_query %}
-  <div class="flash flash-error">
-    No income Gmail search query is set yet. Add one in
-    <a href="{{ url_for('settings_page') }}">Settings</a> (e.g.
-    <code>from:(payroll.com) subject:(payment)</code>) so sync knows which emails to scan.
-  </div>
-{% endif %}
+<p class="settings-help">
+  To import paycheck or bank emails, add queries on
+  <a href="{{ url_for('email_setup') }}">Email queries</a> with type Income or Withdrawal.
+</p>
 
 <datalist id="income-persons">
   {% for name in persons %}
@@ -59,124 +56,6 @@
       </div>
     {% else %}
       <div class="empty-state"><p>No income buckets yet.</p></div>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <h2>Bank email rules</h2>
-    <p class="settings-help">
-      When a synced email contains the match text, it is imported using this rule.
-      Deposit rules create income entries; withdrawal rules (e.g. mortgage payments)
-      create expenses in the chosen expense bucket. The amount and date are read
-      from the email.
-    </p>
-    <form method="post" action="{{ url_for('create_income_rule') }}" class="inline-form">
-      <label class="field">
-        <span>Email contains</span>
-        <input type="text" name="match_text" placeholder="ACME PAYROLL" required>
-      </label>
-      <label class="field">
-        <span>Source name</span>
-        <input type="text" name="source_name" placeholder="ACME salary">
-      </label>
-      <label class="field">
-        <span>Direction</span>
-        <select name="direction">
-          <option value="deposit">Deposit → income</option>
-          <option value="withdrawal">Withdrawal → expense</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Income bucket (deposits)</span>
-        <select name="bucket_id">
-          <option value="">Unassigned</option>
-          {% for bucket in income_buckets %}
-            <option value="{{ bucket.id }}">{{ bucket.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="field">
-        <span>Expense bucket (withdrawals)</span>
-        <select name="expense_bucket_id">
-          <option value="">Pending review</option>
-          {% for option in expense_bucket_options %}
-            <option value="{{ option.id }}">{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="field">
-        <span>Person</span>
-        <input type="text" name="person" list="income-persons" placeholder="Juan">
-      </label>
-      <button type="submit" class="btn btn-primary">Add rule</button>
-    </form>
-
-    {% if income_rules %}
-      <div class="bucket-tree">
-        {% for rule in income_rules %}
-          <div class="bucket-row">
-            <div class="bucket-info">
-              <strong>{{ rule.source_name }}</strong>
-              <span class="muted">contains “{{ rule.match_text }}”</span>
-              <span class="pill">{{ "Withdrawal" if rule.direction == "withdrawal" else "Deposit" }}</span>
-              {% if rule.direction == "withdrawal" %}
-                <span class="pill">{{ rule.expense_bucket_name or "Pending review" }}</span>
-              {% else %}
-                <span class="pill">{{ rule.bucket_name or "Unassigned" }}</span>
-              {% endif %}
-              {% if rule.person %}<span class="pill">{{ rule.person }}</span>{% endif %}
-            </div>
-            <details class="bucket-actions">
-              <summary>Edit</summary>
-              <form method="post" action="{{ url_for('update_income_rule', rule_id=rule.id) }}" class="inline-form">
-                <label class="field">
-                  <span>Email contains</span>
-                  <input type="text" name="match_text" value="{{ rule.match_text }}" required>
-                </label>
-                <label class="field">
-                  <span>Source name</span>
-                  <input type="text" name="source_name" value="{{ rule.source_name }}">
-                </label>
-                <label class="field">
-                  <span>Direction</span>
-                  <select name="direction">
-                    <option value="deposit" {% if rule.direction != "withdrawal" %}selected{% endif %}>Deposit → income</option>
-                    <option value="withdrawal" {% if rule.direction == "withdrawal" %}selected{% endif %}>Withdrawal → expense</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Income bucket (deposits)</span>
-                  <select name="bucket_id">
-                    <option value="">Unassigned</option>
-                    {% for bucket in income_buckets %}
-                      <option value="{{ bucket.id }}" {% if rule.bucket_id == bucket.id %}selected{% endif %}>{{ bucket.name }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Expense bucket (withdrawals)</span>
-                  <select name="expense_bucket_id">
-                    <option value="">Pending review</option>
-                    {% for option in expense_bucket_options %}
-                      <option value="{{ option.id }}" {% if rule.expense_bucket_id == option.id %}selected{% endif %}>{{ option.label }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Person</span>
-                  <input type="text" name="person" value="{{ rule.person or '' }}" list="income-persons">
-                </label>
-                <button type="submit" class="btn btn-secondary">Save</button>
-              </form>
-              <form method="post" action="{{ url_for('delete_income_rule', rule_id=rule.id) }}" class="inline-form">
-                <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this income rule?')">Delete</button>
-              </form>
-            </details>
-          </div>
-        {% endfor %}
-      </div>
-    {% else %}
-      <div class="empty-state"><p>No income rules yet. Add one above to start importing income.</p></div>
     {% endif %}
   </section>
 </div>

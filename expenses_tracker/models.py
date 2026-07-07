@@ -155,6 +155,30 @@ class Income:
     email_from: str | None
 
 
+EMAIL_QUERY_KINDS = ("expense", "income", "withdrawal")
+PERSON_MODES = ("fixed", "from_card")
+
+
+@dataclass
+class EmailQuery:
+    id: int
+    name: str
+    query: str
+    enabled: bool
+    kind: str = "expense"
+    match_text: str = ""
+    from_pattern: str | None = None
+    merchant_label: str | None = None
+    merchant_name: str | None = None
+    amount_label: str | None = None
+    expense_bucket_id: int | None = None
+    expense_bucket_name: str | None = None
+    income_bucket_id: int | None = None
+    income_bucket_name: str | None = None
+    person: str | None = None
+    person_mode: str = "fixed"
+
+
 @dataclass
 class ParsedIncomeEmail:
     gmail_message_id: str

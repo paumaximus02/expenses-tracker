@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import base64
+import html as html_module
 import re
 from datetime import date
 
 from expenses_tracker.dates import resolve_transaction_date
 
-from expenses_tracker.citi_parser import is_citi_alert, parse_citi_message
+from expenses_tracker.citi_parser import (
+    extract_citi_transaction_block,
+    has_citi_transaction_details,
+    is_citi_alert,
+    is_citi_link_only_body,
+    parse_citi_message,
+)
 from expenses_tracker.models import ParsedEmail
 
 AMOUNT_PATTERNS = [
@@ -33,8 +40,25 @@ def _parse_date(
     )
 
 
+def _html_to_text(raw_html: str) -> str:
+    text = raw_html
+    text = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", text)
+    text = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n", text)
+    text = re.sub(r"(?i)</tr\s*>", "\n", text)
+    text = re.sub(r"(?i)</td\s*>", " ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_module.unescape(text)
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
 def _decode_body(payload: dict) -> str:
-    parts: list[str] = []
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
 
     def walk(part: dict) -> None:
         mime_type = part.get("mimeType", "")
@@ -42,16 +66,25 @@ def _decode_body(payload: dict) -> str:
         data = body.get("data")
         if data and mime_type in ("text/plain", "text/html"):
             raw = base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
-            if mime_type == "text/html":
-                raw = re.sub(r"<[^>]+>", " ", raw)
-                raw = re.sub(r"&nbsp;", " ", raw)
-                raw = re.sub(r"\s+", " ", raw)
-            parts.append(raw)
+            if mime_type == "text/plain":
+                plain_parts.append(raw)
+            else:
+                html_parts.append(_html_to_text(raw))
         for child in part.get("parts", []):
             walk(child)
 
     walk(payload)
-    return "\n".join(parts)
+    plain = "\n".join(plain_parts).strip()
+    html = "\n".join(html_parts).strip()
+
+    if html and has_citi_transaction_details(html):
+        if not plain or is_citi_link_only_body(plain):
+            return html
+    if plain and html:
+        if has_citi_transaction_details(html) and not has_citi_transaction_details(plain):
+            return html
+        return f"{plain}\n{html}"
+    return plain or html
 
 
 def _parse_amount(text: str) -> float | None:

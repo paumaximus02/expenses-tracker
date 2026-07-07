@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block title %}Email queries · Expenses Tracker{% endblock %}
+
+{% macro query_fields(q=None, card_holders_text='') %}
+  {% set item = q or {} %}
+  <label class="field">
+    <span>Name</span>
+    <input type="text" name="name" value="{{ item.name or '' }}" placeholder="LBS bank alerts" required>
+  </label>
+  <label class="field">
+    <span>Gmail search</span>
+    <input type="text" name="query" value="{{ item.query or '' }}" placeholder="from:(info@lbsfcu.org) after:2026/04/01" required>
+  </label>
+  <label class="field">
+    <span>Type</span>
+    <select name="kind">
+      <option value="expense" {% if (item.kind or 'expense') == 'expense' %}selected{% endif %}>Expense</option>
+      <option value="income" {% if item.kind == 'income' %}selected{% endif %}>Income</option>
+      <option value="withdrawal" {% if item.kind == 'withdrawal' %}selected{% endif %}>Withdrawal (expense)</option>
+    </select>
+  </label>
+  <label class="field">
+    <span>Email contains (match text)</span>
+    <input type="text" name="match_text" value="{{ item.match_text or '' }}" placeholder="Description: Deposit" required>
+  </label>
+  <label class="field">
+    <span>Sender contains (optional)</span>
+    <input type="text" name="from_pattern" value="{{ item.from_pattern or '' }}" placeholder="lbsfcu.org">
+  </label>
+  <label class="field">
+    <span>Merchant/source label</span>
+    <input type="text" name="merchant_label" value="{{ item.merchant_label or '' }}" placeholder="Description">
+  </label>
+  <label class="field">
+    <span>Fixed merchant/source (optional)</span>
+    <input type="text" name="merchant_name" value="{{ item.merchant_name or '' }}" placeholder="CMG Mortgage">
+  </label>
+  <label class="field">
+    <span>Amount label</span>
+    <input type="text" name="amount_label" value="{{ item.amount_label or '' }}" placeholder="Amount">
+  </label>
+  <label class="field expense-bucket-field">
+    <span>Expense bucket</span>
+    <select name="expense_bucket_id">
+      <option value="">Pending review</option>
+      {% for option in expense_bucket_options %}
+        <option value="{{ option.id }}" {% if item.expense_bucket_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field income-bucket-field">
+    <span>Income bucket</span>
+    <select name="income_bucket_id">
+      <option value="">Unassigned</option>
+      {% for bucket in income_buckets %}
+        <option value="{{ bucket.id }}" {% if item.income_bucket_id == bucket.id %}selected{% endif %}>{{ bucket.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field person-assignment-block">
+    <span>Person assignment</span>
+    <div class="person-mode-options">
+      <label class="checkbox">
+        <input type="radio" name="person_mode" value="fixed"
+               {% if (item.person_mode or 'fixed') == 'fixed' %}checked{% endif %}>
+        <span>Fixed person</span>
+      </label>
+      <label class="checkbox">
+        <input type="radio" name="person_mode" value="from_card"
+               {% if item.person_mode == 'from_card' %}checked{% endif %}>
+        <span>From card in email</span>
+      </label>
+    </div>
+    <p class="settings-help person-from-card-help">
+      Reads the card ending in #### from the email and maps it using
+      <a href="{{ url_for('settings_page') }}">Settings → Card holders</a>
+      {% if card_holders_text %} ({{ card_holders_text }}){% endif %}.
+    </p>
+  </label>
+  <label class="field person-fixed-field">
+    <span class="person-fixed-label">Person name</span>
+    <input type="text" name="person" value="{{ item.person or '' }}" list="email-query-persons" placeholder="Juan">
+  </label>
+{% endmacro %}
+
+{% block content %}
+<section class="page-head page-head-row">
+  <div>
+    <h1>Email queries</h1>
+    <p class="subtitle">
+      Configure Gmail searches and how matching emails become expenses or income.
+      Load a sample email to verify field labels before syncing.
+    </p>
+  </div>
+</section>
+
+<datalist id="email-query-persons">
+  {% for name in persons %}
+    <option value="{{ name }}"></option>
+  {% endfor %}
+</datalist>
+
+<div class="settings-grid">
+  <section class="panel">
+    <h2>Your queries</h2>
+    {% if queries %}
+      <div class="bucket-tree">
+        {% for query in queries %}
+          <div class="bucket-row">
+            <div class="bucket-info">
+              <strong>{{ query.name }}</strong>
+              <span class="pill">{{ query.kind|capitalize }}</span>
+              {% if not query.enabled %}<span class="pill">Disabled</span>{% endif %}
+              {% if not query.match_text %}<span class="pill">Needs setup</span>{% endif %}
+              {% if query.kind in ('expense', 'withdrawal') and query.person_mode == 'from_card' %}
+                <span class="pill">Card → person</span>
+              {% elif query.person %}
+                <span class="pill">{{ query.person }}</span>
+              {% endif %}
+              <span class="muted">{{ query.query }}</span>
+            </div>
+            <div class="inline-form">
+              <a href="{{ url_for('email_setup', edit=query.id) }}" class="btn btn-secondary">Edit</a>
+              <form method="post" action="{{ url_for('delete_email_query', query_id=query.id) }}">
+                <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this query?')">Delete</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state"><p>No email queries yet. Create one below.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="panel" id="query-editor">
+    <h2>{% if edit_query %}Edit query{% else %}New query{% endif %}</h2>
+    <form method="post"
+          action="{% if edit_query %}{{ url_for('update_email_query', query_id=edit_query.id) }}{% else %}{{ url_for('create_email_query') }}{% endif %}"
+          class="settings-form"
+          id="email-query-form">
+      {{ query_fields(edit_query, card_holders_text) }}
+      {% if edit_query %}
+        <label class="checkbox">
+          <input type="checkbox" name="enabled" value="on" {% if edit_query.enabled %}checked{% endif %}>
+          <span>Enabled for sync</span>
+        </label>
+      {% endif %}
+      <div class="inline-form">
+        <button type="button" class="btn btn-secondary" id="load-sample-btn">Load sample email</button>
+        <button type="submit" class="btn btn-primary">Save query</button>
+        {% if edit_query %}
+          <a href="{{ url_for('email_setup') }}" class="btn btn-secondary">Cancel</a>
+        {% endif %}
+      </div>
+    </form>
+
+    <div id="sample-panel" class="sample-panel" hidden>
+      <h3>Sample email</h3>
+      <div id="sample-error" class="flash flash-error" hidden></div>
+      <div class="email-example">
+        <p><strong>From:</strong> <span id="sample-sender"></span></p>
+        <p><strong>Subject:</strong> <span id="sample-subject"></span></p>
+        <pre id="sample-body" class="sample-body"></pre>
+      </div>
+      <div id="preview-panel" class="import-preview" hidden>
+        <h4>Import preview</h4>
+        <p id="preview-summary"></p>
+        <p id="preview-note" class="muted"></p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById("email-query-form");
+  const loadBtn = document.getElementById("load-sample-btn");
+  const samplePanel = document.getElementById("sample-panel");
+  const sampleError = document.getElementById("sample-error");
+  const previewPanel = document.getElementById("preview-panel");
+  const previewSummary = document.getElementById("preview-summary");
+  const previewNote = document.getElementById("preview-note");
+  const editId = {{ edit_query.id if edit_query else 'null' }};
+
+  function togglePersonFields() {
+    const kind = form.querySelector('[name="kind"]').value;
+    const assignmentBlock = form.querySelector(".person-assignment-block");
+    const fixedField = form.querySelector(".person-fixed-field");
+    const fixedLabel = form.querySelector(".person-fixed-label");
+    const personMode = form.querySelector('[name="person_mode"]:checked');
+    const fromCard = personMode && personMode.value === "from_card";
+
+    if (kind === "income") {
+      assignmentBlock.style.display = "none";
+      fixedField.style.display = "";
+      fixedLabel.textContent = "Person (optional)";
+      return;
+    }
+
+    assignmentBlock.style.display = "";
+    fixedField.style.display = fromCard ? "none" : "";
+    form.querySelector(".person-from-card-help").style.display = fromCard ? "" : "none";
+    fixedLabel.textContent = kind === "withdrawal" ? "Person name" : "Person name";
+  }
+
+  function toggleBucketFields() {
+    const kind = form.querySelector('[name="kind"]').value;
+    form.querySelector(".expense-bucket-field").style.display =
+      kind === "income" ? "none" : "";
+    form.querySelector(".income-bucket-field").style.display =
+      kind === "income" ? "" : "none";
+    togglePersonFields();
+  }
+
+  form.querySelector('[name="kind"]').addEventListener("change", toggleBucketFields);
+  form.querySelectorAll('[name="person_mode"]').forEach(function (input) {
+    input.addEventListener("change", togglePersonFields);
+  });
+  toggleBucketFields();
+
+  loadBtn.addEventListener("click", async function () {
+    sampleError.hidden = true;
+    previewPanel.hidden = true;
+    const data = new FormData(form);
+    let url = "{{ url_for('email_query_sample_draft') }}";
+    if (editId) {
+      const params = new URLSearchParams(data);
+      url = `/email-setup/queries/${editId}/sample?` + params.toString();
+    }
+    loadBtn.disabled = true;
+    loadBtn.textContent = "Loading…";
+    try {
+      const response = editId
+        ? await fetch(url)
+        : await fetch(url, { method: "POST", body: data });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to load sample.");
+      }
+      samplePanel.hidden = false;
+      document.getElementById("sample-sender").innerHTML = payload.sender_html || payload.sender;
+      document.getElementById("sample-subject").innerHTML = payload.subject_html || payload.subject;
+      document.getElementById("sample-body").innerHTML = payload.body_html || payload.body;
+      if (payload.preview) {
+        previewPanel.hidden = false;
+        const p = payload.preview;
+        const amount = p.amount != null ? `$${p.amount.toFixed(2)}` : "—";
+        let summary =
+          `${p.kind_label}${p.matched ? "" : " (no match)"}: ${p.merchant || "—"} · ${amount}` +
+          (p.date ? ` · ${p.date}` : "");
+        if (p.card_holder) {
+          summary += ` · ${p.card_holder}`;
+          if (p.card_last_four) {
+            summary += ` (${p.card_last_four})`;
+          }
+        }
+        previewSummary.textContent = summary;
+        previewNote.textContent = p.note || "";
+      }
+    } catch (err) {
+      samplePanel.hidden = false;
+      sampleError.hidden = false;
+      sampleError.textContent = err.message;
+    } finally {
+      loadBtn.disabled = false;
+      loadBtn.textContent = "Load sample email";
+    }
+  });
+})();
+</script>
+{% endblock %}

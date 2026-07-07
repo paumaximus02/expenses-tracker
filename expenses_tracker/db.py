@@ -11,7 +11,10 @@ from pathlib import Path
 from expenses_tracker.buckets import format_bucket_path
 from expenses_tracker.display import format_merchant
 from expenses_tracker.models import (
+    EMAIL_QUERY_KINDS,
+    PERSON_MODES,
     Bucket,
+    EmailQuery,
     Expense,
     ExpenseStatus,
     Income,
@@ -111,6 +114,8 @@ class Database:
         self._migrate_tenancy(conn)
         self._migrate_buckets_hierarchy(conn)
         self._migrate_income(conn)
+        self._migrate_email_pipeline_v2(conn)
+        self._migrate_unified_email_queries(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS dismissed_merchant_groups (
@@ -237,6 +242,238 @@ class Database:
                 ON incomes(tenant_id, allocated_month);
             """
         )
+
+    def _migrate_email_pipeline_v2(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS email_queries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                name TEXT NOT NULL,
+                query TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(tenant_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS message_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                query_id INTEGER REFERENCES email_queries(id),
+                name TEXT NOT NULL,
+                match_text TEXT NOT NULL,
+                from_pattern TEXT,
+                kind TEXT NOT NULL,
+                merchant_label TEXT,
+                merchant_name TEXT,
+                amount_label TEXT,
+                expense_bucket_id INTEGER REFERENCES buckets(id),
+                income_bucket_id INTEGER REFERENCES income_buckets(id),
+                person TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS rule_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                query_id INTEGER REFERENCES email_queries(id),
+                fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                kind TEXT,
+                match_text TEXT,
+                from_pattern TEXT,
+                merchant_label TEXT,
+                merchant_name TEXT,
+                amount_label TEXT,
+                rule_name TEXT,
+                explanation TEXT,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                sample_subject TEXT,
+                sample_snippet TEXT,
+                source TEXT NOT NULL DEFAULT 'heuristic',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(tenant_id, fingerprint)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_message_rules_tenant
+                ON message_rules(tenant_id, query_id);
+            CREATE INDEX IF NOT EXISTS idx_rule_suggestions_status
+                ON rule_suggestions(tenant_id, status);
+            """
+        )
+        suggestion_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(rule_suggestions)")
+        }
+        if "samples_json" not in suggestion_columns:
+            conn.execute("ALTER TABLE rule_suggestions ADD COLUMN samples_json TEXT")
+
+    def _migrate_unified_email_queries(self, conn: sqlite3.Connection) -> None:
+        query_columns = {row[1] for row in conn.execute("PRAGMA table_info(email_queries)")}
+        column_defs = (
+            ("kind", "TEXT NOT NULL DEFAULT 'expense'"),
+            ("match_text", "TEXT NOT NULL DEFAULT ''"),
+            ("from_pattern", "TEXT"),
+            ("merchant_label", "TEXT"),
+            ("merchant_name", "TEXT"),
+            ("amount_label", "TEXT"),
+            ("expense_bucket_id", "INTEGER REFERENCES buckets(id)"),
+            ("income_bucket_id", "INTEGER REFERENCES income_buckets(id)"),
+            ("person", "TEXT"),
+            ("person_mode", "TEXT NOT NULL DEFAULT 'fixed'"),
+        )
+        for name, definition in column_defs:
+            if name not in query_columns:
+                conn.execute(f"ALTER TABLE email_queries ADD COLUMN {name} {definition}")
+                if name == "person_mode":
+                    conn.execute(
+                        """
+                        UPDATE email_queries
+                        SET person_mode = 'from_card'
+                        WHERE kind = 'expense'
+                          AND (person IS NULL OR TRIM(person) = '')
+                        """
+                    )
+
+        tenants = conn.execute("SELECT id FROM tenants").fetchall()
+        for tenant_row in tenants:
+            tenant_id = tenant_row["id"]
+            if conn.execute(
+                "SELECT 1 FROM sync_state WHERE tenant_id = ? AND key = ?",
+                (tenant_id, "email_queries_unified_migrated"),
+            ).fetchone():
+                continue
+
+            rule_rows = conn.execute(
+                """
+                SELECT r.*
+                FROM message_rules r
+                WHERE r.tenant_id = ? AND r.query_id IS NOT NULL AND r.enabled = 1
+                ORDER BY r.query_id, r.priority DESC, r.id
+                """,
+                (tenant_id,),
+            ).fetchall()
+            merged_queries: set[int] = set()
+            for rule in rule_rows:
+                query_id = rule["query_id"]
+                if query_id in merged_queries:
+                    continue
+                configured = conn.execute(
+                    "SELECT match_text FROM email_queries WHERE id = ? AND tenant_id = ?",
+                    (query_id, tenant_id),
+                ).fetchone()
+                if configured and (configured["match_text"] or "").strip():
+                    merged_queries.add(query_id)
+                    continue
+                if rule["kind"] == "ignore":
+                    conn.execute(
+                        "UPDATE email_queries SET enabled = 0 WHERE id = ? AND tenant_id = ?",
+                        (query_id, tenant_id),
+                    )
+                    merged_queries.add(query_id)
+                    continue
+                kind = rule["kind"]
+                if kind not in EMAIL_QUERY_KINDS:
+                    kind = "expense"
+                conn.execute(
+                    """
+                    UPDATE email_queries
+                    SET kind = ?, match_text = ?, from_pattern = ?,
+                        merchant_label = ?, merchant_name = ?, amount_label = ?,
+                        expense_bucket_id = ?, income_bucket_id = ?, person = ?
+                    WHERE id = ? AND tenant_id = ?
+                    """,
+                    (
+                        kind,
+                        rule["match_text"],
+                        rule["from_pattern"],
+                        rule["merchant_label"],
+                        rule["merchant_name"],
+                        rule["amount_label"],
+                        rule["expense_bucket_id"],
+                        rule["income_bucket_id"],
+                        rule["person"],
+                        query_id,
+                        tenant_id,
+                    ),
+                )
+                merged_queries.add(query_id)
+
+            tenant = conn.execute(
+                """
+                SELECT gmail_search_query, income_gmail_search_query
+                FROM tenants WHERE id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+            existing_queries = conn.execute(
+                "SELECT COUNT(*) AS count FROM email_queries WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchone()["count"]
+            legacy_query = (tenant["gmail_search_query"] or "").strip()
+            income_query = (tenant["income_gmail_search_query"] or "").strip()
+
+            if existing_queries == 0 and legacy_query:
+                conn.execute(
+                    """
+                    INSERT INTO email_queries (
+                        tenant_id, name, query, enabled, kind, match_text
+                    ) VALUES (?, ?, ?, 1, 'expense', '')
+                    """,
+                    (tenant_id, "Card transactions", legacy_query),
+                )
+
+            income_rules = conn.execute(
+                """
+                SELECT match_text, source_name, bucket_id, person, direction, expense_bucket_id
+                FROM income_rules WHERE tenant_id = ?
+                ORDER BY id
+                """,
+                (tenant_id,),
+            ).fetchall()
+            if income_query and income_rules:
+                for rule in income_rules:
+                    kind = "withdrawal" if rule["direction"] == "withdrawal" else "income"
+                    name = rule["source_name"] or rule["match_text"]
+                    exists = conn.execute(
+                        """
+                        SELECT 1 FROM email_queries
+                        WHERE tenant_id = ? AND query = ? AND match_text = ?
+                        LIMIT 1
+                        """,
+                        (tenant_id, income_query, rule["match_text"]),
+                    ).fetchone()
+                    if exists is not None:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO email_queries (
+                            tenant_id, name, query, enabled, kind, match_text,
+                            merchant_label, amount_label, expense_bucket_id,
+                            income_bucket_id, person, merchant_name
+                        ) VALUES (?, ?, ?, 1, ?, ?, 'Description', 'Amount', ?, ?, ?, ?)
+                        """,
+                        (
+                            tenant_id,
+                            name,
+                            income_query,
+                            kind,
+                            rule["match_text"],
+                            rule["expense_bucket_id"] if kind == "withdrawal" else None,
+                            rule["bucket_id"] if kind == "income" else None,
+                            rule["person"],
+                            rule["source_name"],
+                        ),
+                    )
+
+            conn.execute(
+                """
+                INSERT INTO sync_state (tenant_id, key, value) VALUES (?, ?, ?)
+                ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value
+                """,
+                (tenant_id, "email_queries_unified_migrated", "true"),
+            )
 
     def _dedupe_merchant_rules(self, conn: sqlite3.Connection, *, tenant_id: int) -> None:
         rows = conn.execute(
@@ -976,6 +1213,15 @@ class Database:
         if updated is None:
             raise RuntimeError("Failed to load updated rule.")
         return updated
+
+    def delete_merchant_rule(self, rule_id: int) -> None:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM merchant_rules WHERE id = ? AND tenant_id = ?",
+                (rule_id, self._require_tenant()),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Merchant rule {rule_id} not found.")
 
     def upsert_merchant_rule(
         self,
@@ -1883,6 +2129,253 @@ class Database:
                 (tenant_id, tenant_id),
             ).fetchall()
         return [row["person"] for row in rows]
+
+    # --- Email queries ---
+
+    _EMAIL_QUERY_SELECT = """
+        SELECT q.*,
+               eb.name AS expense_bucket_name,
+               ib.name AS income_bucket_name
+        FROM email_queries q
+        LEFT JOIN buckets eb ON eb.id = q.expense_bucket_id AND eb.tenant_id = q.tenant_id
+        LEFT JOIN income_buckets ib ON ib.id = q.income_bucket_id AND ib.tenant_id = q.tenant_id
+    """
+
+    def _row_to_email_query(self, row: sqlite3.Row) -> EmailQuery:
+        return EmailQuery(
+            id=row["id"],
+            name=row["name"],
+            query=row["query"],
+            enabled=bool(row["enabled"]),
+            kind=row["kind"] if "kind" in row.keys() else "expense",
+            match_text=row["match_text"] if "match_text" in row.keys() else "",
+            from_pattern=row["from_pattern"] if "from_pattern" in row.keys() else None,
+            merchant_label=row["merchant_label"] if "merchant_label" in row.keys() else None,
+            merchant_name=row["merchant_name"] if "merchant_name" in row.keys() else None,
+            amount_label=row["amount_label"] if "amount_label" in row.keys() else None,
+            expense_bucket_id=row["expense_bucket_id"] if "expense_bucket_id" in row.keys() else None,
+            expense_bucket_name=row["expense_bucket_name"] if "expense_bucket_name" in row.keys() else None,
+            income_bucket_id=row["income_bucket_id"] if "income_bucket_id" in row.keys() else None,
+            income_bucket_name=row["income_bucket_name"] if "income_bucket_name" in row.keys() else None,
+            person=row["person"] if "person" in row.keys() else None,
+            person_mode=row["person_mode"] if "person_mode" in row.keys() else "fixed",
+        )
+
+    def _validate_email_query(
+        self,
+        *,
+        name: str,
+        query: str,
+        kind: str,
+        expense_bucket_id: int | None,
+        income_bucket_id: int | None,
+        person_mode: str,
+    ) -> None:
+        if not name.strip():
+            raise ValueError("Query name is required.")
+        if not query.strip():
+            raise ValueError("Gmail search query is required.")
+        if kind not in EMAIL_QUERY_KINDS:
+            raise ValueError("Query type must be expense, income, or withdrawal.")
+        if expense_bucket_id is not None and self.get_bucket(expense_bucket_id) is None:
+            raise ValueError(f"Expense bucket {expense_bucket_id} not found.")
+        if income_bucket_id is not None and self.get_income_bucket(income_bucket_id) is None:
+            raise ValueError(f"Income bucket {income_bucket_id} not found.")
+        if person_mode not in PERSON_MODES:
+            raise ValueError("Person assignment must be fixed or from_card.")
+
+    def list_email_queries(self, *, enabled_only: bool = False) -> list[EmailQuery]:
+        query = self._EMAIL_QUERY_SELECT + " WHERE q.tenant_id = ?"
+        if enabled_only:
+            query += " AND q.enabled = 1"
+        query += " ORDER BY q.name COLLATE NOCASE"
+        with self.connection() as conn:
+            rows = conn.execute(query, (self._require_tenant(),)).fetchall()
+        return [self._row_to_email_query(row) for row in rows]
+
+    def get_email_query(self, query_id: int) -> EmailQuery | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                self._EMAIL_QUERY_SELECT + " WHERE q.id = ? AND q.tenant_id = ?",
+                (query_id, self._require_tenant()),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_email_query(row)
+
+    def create_email_query(
+        self,
+        *,
+        name: str,
+        query: str,
+        kind: str = "expense",
+        match_text: str = "",
+        from_pattern: str | None = None,
+        merchant_label: str | None = None,
+        merchant_name: str | None = None,
+        amount_label: str | None = None,
+        expense_bucket_id: int | None = None,
+        income_bucket_id: int | None = None,
+        person: str | None = None,
+        person_mode: str = "fixed",
+        enabled: bool = True,
+    ) -> EmailQuery:
+        cleaned_kind = kind.strip().lower() or "expense"
+        cleaned_person_mode = person_mode.strip().lower() or "fixed"
+        if cleaned_kind == "income":
+            cleaned_person_mode = "fixed"
+        self._validate_email_query(
+            name=name,
+            query=query,
+            kind=cleaned_kind,
+            expense_bucket_id=expense_bucket_id if cleaned_kind in ("expense", "withdrawal") else None,
+            income_bucket_id=income_bucket_id if cleaned_kind == "income" else None,
+            person_mode=cleaned_person_mode,
+        )
+        with self.connection() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO email_queries (
+                        tenant_id, name, query, enabled, kind, match_text, from_pattern,
+                        merchant_label, merchant_name, amount_label,
+                        expense_bucket_id, income_bucket_id, person, person_mode
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self._require_tenant(),
+                        name.strip(),
+                        query.strip(),
+                        int(enabled),
+                        cleaned_kind,
+                        match_text.strip(),
+                        (from_pattern or "").strip() or None,
+                        (merchant_label or "").strip() or None,
+                        (merchant_name or "").strip() or None,
+                        (amount_label or "").strip() or None,
+                        expense_bucket_id if cleaned_kind in ("expense", "withdrawal") else None,
+                        income_bucket_id if cleaned_kind == "income" else None,
+                        (person or "").strip() or None,
+                        cleaned_person_mode,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("A query with that name already exists.") from exc
+            query_id = cursor.lastrowid
+        created = self.get_email_query(query_id)
+        if created is None:
+            raise RuntimeError("Failed to load created email query.")
+        return created
+
+    def update_email_query(
+        self,
+        query_id: int,
+        *,
+        name: str,
+        query: str,
+        enabled: bool,
+        kind: str,
+        match_text: str,
+        from_pattern: str | None = None,
+        merchant_label: str | None = None,
+        merchant_name: str | None = None,
+        amount_label: str | None = None,
+        expense_bucket_id: int | None = None,
+        income_bucket_id: int | None = None,
+        person: str | None = None,
+        person_mode: str = "fixed",
+    ) -> EmailQuery:
+        if self.get_email_query(query_id) is None:
+            raise ValueError(f"Email query {query_id} not found.")
+        cleaned_kind = kind.strip().lower() or "expense"
+        cleaned_person_mode = person_mode.strip().lower() or "fixed"
+        if cleaned_kind == "income":
+            cleaned_person_mode = "fixed"
+        self._validate_email_query(
+            name=name,
+            query=query,
+            kind=cleaned_kind,
+            expense_bucket_id=expense_bucket_id if cleaned_kind in ("expense", "withdrawal") else None,
+            income_bucket_id=income_bucket_id if cleaned_kind == "income" else None,
+            person_mode=cleaned_person_mode,
+        )
+        with self.connection() as conn:
+            try:
+                conn.execute(
+                    """
+                    UPDATE email_queries
+                    SET name = ?, query = ?, enabled = ?, kind = ?, match_text = ?,
+                        from_pattern = ?, merchant_label = ?, merchant_name = ?,
+                        amount_label = ?, expense_bucket_id = ?, income_bucket_id = ?,
+                        person = ?, person_mode = ?
+                    WHERE id = ? AND tenant_id = ?
+                    """,
+                    (
+                        name.strip(),
+                        query.strip(),
+                        int(enabled),
+                        cleaned_kind,
+                        match_text.strip(),
+                        (from_pattern or "").strip() or None,
+                        (merchant_label or "").strip() or None,
+                        (merchant_name or "").strip() or None,
+                        (amount_label or "").strip() or None,
+                        expense_bucket_id if cleaned_kind in ("expense", "withdrawal") else None,
+                        income_bucket_id if cleaned_kind == "income" else None,
+                        (person or "").strip() or None,
+                        cleaned_person_mode,
+                        query_id,
+                        self._require_tenant(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("A query with that name already exists.") from exc
+        updated = self.get_email_query(query_id)
+        if updated is None:
+            raise RuntimeError("Failed to load updated email query.")
+        return updated
+
+    def delete_email_query(self, query_id: int) -> None:
+        if self.get_email_query(query_id) is None:
+            raise ValueError(f"Email query {query_id} not found.")
+        with self.connection() as conn:
+            conn.execute(
+                "DELETE FROM email_queries WHERE id = ? AND tenant_id = ?",
+                (query_id, self._require_tenant()),
+            )
+
+    def reset_import_state(self, tenant_id: int) -> dict[str, int]:
+        """Clear imported data and learned rules; keep users, buckets, and email queries."""
+        tenant = self.get_tenant(tenant_id)
+        if tenant is None:
+            raise ValueError(f"Tenant {tenant_id} not found.")
+
+        tables = (
+            "expenses",
+            "incomes",
+            "notifications",
+            "sync_state",
+            "merchant_rules",
+            "income_rules",
+            "dismissed_merchant_groups",
+        )
+        counts: dict[str, int] = {}
+        with self.connection() as conn:
+            for table in tables:
+                cursor = conn.execute(
+                    f"DELETE FROM {table} WHERE tenant_id = ?",
+                    (tenant_id,),
+                )
+                counts[table] = cursor.rowcount
+            conn.execute(
+                """
+                UPDATE tenants
+                SET gmail_search_query = '', income_gmail_search_query = ''
+                WHERE id = ?
+                """,
+                (tenant_id,),
+            )
+        return counts
 
     def list_dismissed_group_keys(self) -> set[str]:
         with self.connection() as conn:

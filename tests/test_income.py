@@ -314,15 +314,13 @@ class IncomeDatabaseTests(unittest.TestCase):
 
 
 class WithdrawalSyncTests(unittest.TestCase):
+    QUERY = "from:(lbsfcu.org)"
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         db_path = Path(self._tmp.name) / "test.db"
         global_db = Database(db_path)
         self.tenant_id = global_db.get_default_tenant_id()
-        global_db.update_tenant_settings(
-            self.tenant_id,
-            income_gmail_search_query="from:(lbsfcu.org)",
-        )
         self.tenant = global_db.get_tenant(self.tenant_id)
         self.db = Database(db_path, tenant_id=self.tenant_id)
 
@@ -343,7 +341,7 @@ class WithdrawalSyncTests(unittest.TestCase):
             def authenticate(self) -> None:
                 pass
 
-            def fetch_messages(self, query: str) -> list[dict]:
+            def fetch_messages(self, query: str, max_results: int | None = None) -> list[dict]:
                 return self.stubbed
 
         return ExpenseSyncService(
@@ -354,14 +352,53 @@ class WithdrawalSyncTests(unittest.TestCase):
             tenant=self.tenant,
         )
 
+    def _create_withdrawal_query(
+        self,
+        *,
+        match_text: str,
+        source_name: str,
+        expense_bucket_id: int | None = None,
+        person: str | None = None,
+        person_mode: str = "fixed",
+    ):
+        return self.db.create_email_query(
+            name=source_name,
+            query=self.QUERY,
+            kind="withdrawal",
+            match_text=match_text,
+            merchant_label="Description",
+            amount_label="Amount",
+            merchant_name=source_name,
+            expense_bucket_id=expense_bucket_id,
+            person=person,
+            person_mode=person_mode,
+        )
+
+    def _create_income_query(
+        self,
+        *,
+        match_text: str,
+        source_name: str,
+        income_bucket_id: int | None = None,
+    ):
+        return self.db.create_email_query(
+            name=source_name,
+            query=self.QUERY,
+            kind="income",
+            match_text=match_text,
+            merchant_label="Description",
+            amount_label="Amount",
+            merchant_name=source_name,
+            income_bucket_id=income_bucket_id,
+        )
+
     def test_withdrawal_email_imports_as_expense(self) -> None:
         from expenses_tracker.models import ExpenseStatus
 
         bucket = self.db.create_bucket("Mortgage")
-        self.db.create_income_rule(
+        self._create_withdrawal_query(
             match_text="CMG MORTGAGE",
             source_name="CMG Mortgage",
-            direction="withdrawal",
             expense_bucket_id=bucket.id,
             person="Juan",
         )
@@ -377,7 +414,7 @@ class WithdrawalSyncTests(unittest.TestCase):
             subject="ACH Transaction Alert",
             body=body,
         )
-        result = self._sync_service([message]).sync_income()
+        result = self._sync_service([message]).sync(record_notification=False)
 
         self.assertEqual(result["withdrawals_imported"], 1)
         self.assertEqual(result["income_imported"], 0)
@@ -390,28 +427,24 @@ class WithdrawalSyncTests(unittest.TestCase):
         self.assertEqual(expense.bucket_id, bucket.id)
         self.assertEqual(expense.status, ExpenseStatus.AUTO)
         self.assertEqual(expense.card_holder, "Juan")
-        self.assertEqual(result["withdrawal_expense_ids"], [expense.id])
 
-        # Second sync of the same message is deduped.
-        rerun = self._sync_service([message]).sync_income()
+        rerun = self._sync_service([message]).sync(record_notification=False)
         self.assertEqual(rerun["withdrawals_imported"], 0)
-        self.assertEqual(rerun["income_skipped"], 1)
         self.assertEqual(len(self.db.list_expenses()), 1)
 
     def test_withdrawal_without_bucket_is_pending(self) -> None:
         from expenses_tracker.models import ExpenseStatus
 
-        self.db.create_income_rule(
+        self._create_withdrawal_query(
             match_text="CMG MORTGAGE",
             source_name="CMG Mortgage",
-            direction="withdrawal",
         )
         message = _gmail_message(
             message_id="msg-w2",
             subject="ACH Transaction Alert",
             body="Description: Withdrawal-ACH-A-CMG MORTGAGE INC\nAmount: $3,145.20",
         )
-        result = self._sync_service([message]).sync_income()
+        result = self._sync_service([message]).sync(record_notification=False)
         self.assertEqual(result["withdrawals_imported"], 1)
         expense = self.db.list_expenses()[0]
         self.assertIsNone(expense.bucket_id)
@@ -431,10 +464,9 @@ class WithdrawalSyncTests(unittest.TestCase):
 
     def test_bank_alert_in_main_query_uses_withdrawal_rule(self) -> None:
         bucket = self.db.create_bucket("Investments")
-        self.db.create_income_rule(
+        self._create_withdrawal_query(
             match_text="GOLDMAN SACHS",
             source_name="Goldman Sachs transfer",
-            direction="withdrawal",
             expense_bucket_id=bucket.id,
         )
         message = _gmail_message(
@@ -442,12 +474,10 @@ class WithdrawalSyncTests(unittest.TestCase):
             subject="Transaction Alert",
             body=self.GOLDMAN_BODY,
         )
-        # The message arrives via the main expense query (and the income query
-        # returns it too); it must be imported once, through the rule.
         result = self._sync_service([message]).sync(record_notification=False)
 
         self.assertEqual(result["withdrawals_imported"], 1)
-        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["imported"], 1)
         expenses = self.db.list_expenses()
         self.assertEqual(len(expenses), 1)
         self.assertEqual(expenses[0].merchant, "Goldman Sachs transfer")
@@ -455,11 +485,9 @@ class WithdrawalSyncTests(unittest.TestCase):
         self.assertEqual(expenses[0].transaction_date, date(2026, 7, 3))
 
     def test_unmatched_bank_alert_is_not_imported_as_expense(self) -> None:
-        # A rule must exist for sync_income to scan, but it doesn't match.
-        self.db.create_income_rule(
+        self._create_withdrawal_query(
             match_text="CMG MORTGAGE",
             source_name="CMG Mortgage",
-            direction="withdrawal",
         )
         message = _gmail_message(
             message_id="msg-gs2",
@@ -474,7 +502,7 @@ class WithdrawalSyncTests(unittest.TestCase):
         self.assertEqual(len(self.db.list_incomes()), 0)
 
     def test_deposit_rules_still_import_income(self) -> None:
-        self.db.create_income_rule(
+        self._create_income_query(
             match_text="SUNCOAST PROPERT",
             source_name="Rental",
         )
@@ -483,7 +511,7 @@ class WithdrawalSyncTests(unittest.TestCase):
             subject="ACH Transaction Alert",
             body=LBS_BODY,
         )
-        result = self._sync_service([message]).sync_income()
+        result = self._sync_service([message]).sync(record_notification=False)
         self.assertEqual(result["income_imported"], 1)
         self.assertEqual(result["withdrawals_imported"], 0)
         self.assertEqual(len(self.db.list_expenses()), 0)

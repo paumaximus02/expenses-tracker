@@ -95,6 +95,69 @@ class CitiDateParsingTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.transaction_date.isoformat(), "2026-05-31")
 
+    def test_parse_citi_link_only_subject_not_present(self) -> None:
+        from expenses_tracker.citi_parser import (
+            format_citi_display_text,
+            is_citi_link_only_body,
+        )
+
+        body = (
+            "Please visit the following link to view your message:\n"
+            "http://fm.info6.citi.com/ats/msg.aspx?sg1=abc"
+        )
+        subject = "A card on your account was not present for a $5.00 transaction"
+        self.assertTrue(is_citi_link_only_body(body))
+        display = format_citi_display_text(subject=subject, body=body)
+        self.assertIn(subject, display)
+        self.assertNotIn("Please visit the following link", display)
+
+        parsed = parse_citi_message(
+            gmail_message_id="citi1",
+            subject=subject,
+            sender="alerts@info6.citi.com",
+            body_text=body,
+            email_date_header="Thu, 3 Jul 2026 08:00:00 -0700",
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.amount, 5.00)
+        self.assertEqual(parsed.merchant, "Card not present")
+
+    def test_parse_citi_merchant_from_html_body(self) -> None:
+        body = (
+            "Amount: $5.00 Merchant Grok Xai +18002698161 Us Location United States "
+            "Date 07/03/2026 Time 03:55 PM ET"
+        )
+        parsed = parse_citi_message(
+            gmail_message_id="citi-html",
+            subject="A card on your account was not present for a $5.00 transaction",
+            sender="alerts@info6.citi.com",
+            body_text=body,
+            email_date_header="Thu, 3 Jul 2026 08:00:00 -0700",
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.amount, 5.00)
+        self.assertEqual(parsed.merchant, "Grok Xai +18002698161 Us")
+
+    def test_parse_citi_merchant_from_costco_subject(self) -> None:
+        subject = (
+            "A transaction was made on your Costco Anywhere Visa Card by "
+            "Card ending in 4149 for a $42.15 at COSTCO WHSE #1234."
+        )
+        body = "Please visit the following link to view your message: http://fm.info6.citi.com/x"
+        parsed = parse_citi_message(
+            gmail_message_id="citi2",
+            subject=subject,
+            sender="alerts@info6.citi.com",
+            body_text=body,
+            email_date_header="Thu, 3 Jul 2026 08:00:00 -0700",
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.amount, 42.15)
+        self.assertIn("COSTCO", parsed.merchant)
+
 
 if __name__ == "__main__":
     unittest.main()

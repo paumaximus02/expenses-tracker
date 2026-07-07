@@ -27,20 +27,9 @@
           <span>Card holders</span>
           <input type="text" name="card_holders" value="{{ card_holders_text }}" placeholder="4149:Juan,1201:Debora">
         </label>
-        <label class="field">
-          <span>Gmail search query</span>
-          <input type="text" name="gmail_search_query" value="{{ tenant.gmail_search_query }}">
-        </label>
-        <label class="field">
-          <span>Income Gmail search query</span>
-          <input type="text"
-                 name="income_gmail_search_query"
-                 value="{{ tenant.income_gmail_search_query }}"
-                 placeholder="from:(payroll.com) subject:(payment)">
-        </label>
         <p class="settings-help">
-          Emails found by the income query are imported only when they match an
-          <a href="{{ url_for('income_settings') }}">income rule</a>.
+          Configure which Gmail messages to import on
+          <a href="{{ url_for('email_setup') }}">Email queries</a>.
         </p>
         <button type="submit" class="btn btn-primary">Save settings</button>
       </form>

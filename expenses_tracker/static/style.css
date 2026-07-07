@@ -867,6 +867,211 @@ input[type="radio"] {
   color: var(--accent-dark);
 }
 
+.bucket-row-stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.bucket-info-stack {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+
+.bucket-info-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.query-display {
+  margin: 0.35rem 0 0;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(15, 118, 110, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  overflow-x: auto;
+}
+
+.query-display code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.bucket-actions-full {
+  width: 100%;
+}
+
+.query-field textarea {
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.suggestion-cards {
+  display: grid;
+  gap: 1rem;
+}
+
+.suggestion-card {
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: white;
+  overflow: hidden;
+}
+
+.suggestion-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(15, 118, 110, 0.04);
+}
+
+.suggestion-card-head h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.suggestion-card-head .settings-help {
+  margin: 0;
+}
+
+.suggestion-card-meta {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+}
+
+.suggestion-card-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+}
+
+.suggestion-panel h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.95rem;
+}
+
+.rule-step-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+}
+
+.rule-step-list li + li {
+  margin-top: 0.25rem;
+}
+
+.email-example + .email-example {
+  margin-top: 0.85rem;
+}
+
+.email-example-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.email-example-fields {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 0.55rem;
+}
+
+.email-example-fields div {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0.5rem;
+}
+
+.email-example-fields dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.email-example-fields dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.email-example-note {
+  margin: 0 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.email-example-body {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  overflow-x: auto;
+}
+
+.match-highlight {
+  background: rgba(245, 158, 11, 0.35);
+  border-radius: 0.15rem;
+  padding: 0 0.1rem;
+}
+
+.import-preview {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(15, 118, 110, 0.25);
+  border-radius: 0.65rem;
+  background: rgba(15, 118, 110, 0.05);
+}
+
+.import-preview-fields {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.import-preview-fields div {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 0.5rem;
+}
+
+.import-preview-fields dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.import-preview-fields dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.import-preview-note {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.suggestion-review {
+  padding: 0 1.1rem 1rem;
+}
+
 .inline-form {
   display: grid;
   gap: 0.65rem;
@@ -1227,6 +1432,14 @@ input[type="radio"] {
   .bucket-row {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .suggestion-card-head {
+    flex-direction: column;
+  }
+
+  .suggestion-card-meta {
+    justify-content: flex-start;
   }
 
   .inline-form {
