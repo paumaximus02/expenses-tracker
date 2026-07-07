@@ -7,13 +7,26 @@ from expenses_tracker.bucket_matcher import BucketMatcher, normalize_merchant
 from expenses_tracker.config import Settings
 from expenses_tracker.db import Database
 from expenses_tracker.delivery.dispatcher import NotificationDispatcher
-from expenses_tracker.email_import import apply_email_query, build_context, query_matches
+from expenses_tracker.email_import import (
+    apply_email_query,
+    build_context,
+    explain_match_failure,
+    explain_unparsed,
+    query_matches,
+)
 from expenses_tracker.email_parser import parse_gmail_message
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType, Tenant
 from expenses_tracker.tenancy import global_db
 
 logger = logging.getLogger(__name__)
+
+
+def _message_subject(message: dict) -> str:
+    for header in message.get("payload", {}).get("headers", []):
+        if header.get("name", "").lower() == "subject":
+            return header.get("value", "")
+    return ""
 
 
 class ExpenseSyncService:
@@ -31,6 +44,13 @@ class ExpenseSyncService:
         self.gmail = gmail
         self.matcher = matcher
         self.tenant = tenant
+
+    def _email_query_debug(self, message: str, *args: object) -> None:
+        if self.settings is not None and self.settings.email_query_debug:
+            logger.info("[email-query] " + message, *args)
+
+    def _email_query_debug_enabled(self) -> bool:
+        return self.settings is not None and self.settings.email_query_debug
 
     def sync(self, *, record_notification: bool = True) -> dict[str, int]:
         if not self.gmail.has_token():
@@ -98,6 +118,14 @@ class ExpenseSyncService:
             logger.info("Skipping email import: no enabled email queries configured")
             return empty
 
+        self._email_query_debug(
+            "Starting email query sync for tenant %s (%s): %s enabled queries in order: %s",
+            self.tenant.id,
+            self.tenant.name,
+            len(queries),
+            ", ".join(query.name for query in queries),
+        )
+
         messages_checked = 0
         imported = 0
         auto_assigned = 0
@@ -114,27 +142,82 @@ class ExpenseSyncService:
                     "Skipping query '%s': match text not configured yet",
                     email_query.name,
                 )
+                self._email_query_debug(
+                    "Query id=%s name=%r skipped: match text is empty",
+                    email_query.id,
+                    email_query.name,
+                )
                 continue
 
+            self._email_query_debug(
+                "Running query id=%s name=%r kind=%s match_text=%r gmail_search=%r",
+                email_query.id,
+                email_query.name,
+                email_query.kind,
+                email_query.match_text,
+                email_query.query,
+            )
+            query_stats = {
+                "fetched": 0,
+                "already_claimed": 0,
+                "already_imported": 0,
+                "no_match": 0,
+                "unparsed": 0,
+                "imported_income": 0,
+                "imported_expense": 0,
+                "imported_withdrawal": 0,
+            }
+
             messages = self.gmail.fetch_messages(email_query.query)
+            query_stats["fetched"] = len(messages)
             logger.info(
                 "Fetched %s Gmail messages for query '%s'",
                 len(messages),
                 email_query.name,
             )
+            if not messages:
+                self._email_query_debug(
+                    "Query id=%s name=%r: Gmail search returned no messages",
+                    email_query.id,
+                    email_query.name,
+                )
+
             for message in messages:
                 message_id = message["id"]
                 if message_id in seen_ids:
+                    query_stats["already_claimed"] += 1
+                    self._email_query_debug(
+                        "Message %s skipped for query %r: already claimed by an earlier "
+                        "query in this sync (subject=%r)",
+                        message_id,
+                        email_query.name,
+                        _message_subject(message),
+                    )
                     continue
                 seen_ids.add(message_id)
                 if self.db.expense_exists(message_id) or self.db.income_exists(message_id):
                     skipped += 1
+                    query_stats["already_imported"] += 1
+                    self._email_query_debug(
+                        "Message %s skipped for query %r: already imported (subject=%r)",
+                        message_id,
+                        email_query.name,
+                        _message_subject(message),
+                    )
                     continue
 
                 messages_checked += 1
                 context = build_context(message)
                 if not query_matches(context, email_query):
                     skipped += 1
+                    query_stats["no_match"] += 1
+                    self._email_query_debug(
+                        "Message %s skipped for query %r: %s (subject=%r)",
+                        message_id,
+                        email_query.name,
+                        explain_match_failure(context, email_query),
+                        context.subject,
+                    )
                     continue
 
                 outcome, record_id = apply_email_query(
@@ -143,19 +226,43 @@ class ExpenseSyncService:
                     email_query,
                     card_holders=self.tenant.card_holders,
                     matcher=self.matcher,
+                    debug=self._email_query_debug_enabled(),
                 )
                 if outcome == "unparsed" or record_id is None:
                     skipped += 1
+                    query_stats["unparsed"] += 1
+                    self._email_query_debug(
+                        "Message %s skipped for query %r: unparsed — %s (subject=%r)",
+                        message_id,
+                        email_query.name,
+                        explain_unparsed(
+                            context,
+                            email_query,
+                            card_holders=self.tenant.card_holders,
+                        ),
+                        context.subject,
+                    )
                     continue
 
                 if outcome == "income":
                     income_imported += 1
+                    query_stats["imported_income"] += 1
+                    self._email_query_debug(
+                        "Message %s imported as income id=%s via query %r (subject=%r)",
+                        message_id,
+                        record_id,
+                        email_query.name,
+                        context.subject,
+                    )
                     continue
 
                 expense_ids.append(record_id)
                 imported += 1
                 if email_query.kind == "withdrawal":
                     withdrawals_imported += 1
+                    query_stats["imported_withdrawal"] += 1
+                else:
+                    query_stats["imported_expense"] += 1
 
                 expense = self.db.get_expense(record_id)
                 if expense is None:
@@ -164,6 +271,47 @@ class ExpenseSyncService:
                     pending += 1
                 else:
                     auto_assigned += 1
+                self._email_query_debug(
+                    "Message %s imported as expense id=%s status=%s via query %r "
+                    "(merchant=%r amount=%s subject=%r)",
+                    message_id,
+                    record_id,
+                    expense.status.value,
+                    email_query.name,
+                    expense.merchant,
+                    expense.amount,
+                    context.subject,
+                )
+
+            self._email_query_debug(
+                "Query id=%s name=%r finished: fetched=%s already_claimed=%s "
+                "already_imported=%s no_match=%s unparsed=%s imported_income=%s "
+                "imported_expense=%s imported_withdrawal=%s",
+                email_query.id,
+                email_query.name,
+                query_stats["fetched"],
+                query_stats["already_claimed"],
+                query_stats["already_imported"],
+                query_stats["no_match"],
+                query_stats["unparsed"],
+                query_stats["imported_income"],
+                query_stats["imported_expense"],
+                query_stats["imported_withdrawal"],
+            )
+
+        self._email_query_debug(
+            "Email query sync finished for tenant %s: messages_checked=%s imported=%s "
+            "auto_assigned=%s pending=%s skipped=%s income_imported=%s "
+            "withdrawals_imported=%s",
+            self.tenant.id,
+            messages_checked,
+            imported,
+            auto_assigned,
+            pending,
+            skipped,
+            income_imported,
+            withdrawals_imported,
+        )
 
         return {
             "messages_checked": messages_checked,

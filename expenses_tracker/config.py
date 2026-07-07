@@ -46,6 +46,7 @@ class Settings:
     smtp_password: str | None
     smtp_from: str | None
     smtp_use_tls: bool
+    email_query_debug: bool = False
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -134,4 +135,5 @@ def get_settings() -> Settings:
         smtp_password=os.getenv("SMTP_PASSWORD") or None,
         smtp_from=os.getenv("SMTP_FROM") or None,
         smtp_use_tls=_env_bool("SMTP_USE_TLS", True),
+        email_query_debug=_env_bool("EMAIL_QUERY_DEBUG", False),
     )

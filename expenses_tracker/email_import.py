@@ -1,6 +1,7 @@
 """Deterministic email import from user-configured Gmail queries."""
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -22,6 +23,8 @@ from expenses_tracker.models import EmailQuery, ExpenseStatus
 
 if TYPE_CHECKING:
     from expenses_tracker.bucket_matcher import BucketMatcher
+
+logger = logging.getLogger(__name__)
 
 SAMPLE_EMAIL_BODY_CHARS = 800
 
@@ -99,6 +102,51 @@ def query_matches(context: MessageContext, email_query: EmailQuery) -> bool:
         return False
     haystack = f"{context.subject}\n{context.body}\n{context.sender}".lower()
     return match_text.lower() in haystack
+
+
+def explain_match_failure(context: MessageContext, email_query: EmailQuery) -> str:
+    """Human-readable reason when query_matches() is false."""
+    if email_query.from_pattern and email_query.from_pattern.lower() not in context.sender.lower():
+        return (
+            f"sender {context.sender!r} does not contain from pattern "
+            f"{email_query.from_pattern!r}"
+        )
+    match_text = (email_query.match_text or "").strip()
+    if not match_text:
+        return "match text is empty"
+    return f"match text {match_text!r} not found in subject/body/sender"
+
+
+def explain_unparsed(
+    context: MessageContext,
+    email_query: EmailQuery,
+    *,
+    card_holders: dict[str, str] | None = None,
+) -> str:
+    """Human-readable reason when apply_email_query would return unparsed."""
+    merchant, amount, transaction_date, card_holder, card_last_four = _extract_fields(
+        context,
+        email_query,
+        card_holders=card_holders,
+    )
+    missing: list[str] = []
+    if amount is None:
+        label = email_query.amount_label or "(auto-detect)"
+        missing.append(f"amount (label={label!r})")
+    if transaction_date is None:
+        missing.append("transaction date")
+    if missing:
+        return "could not parse " + " and ".join(missing)
+
+    if email_query.person_mode == "from_card" and email_query.kind != "income":
+        if card_last_four is None:
+            return "person_mode=from_card but no card last-four found in email"
+        if card_holder is None:
+            return (
+                f"person_mode=from_card but card {card_last_four!r} is not mapped "
+                "in Settings → Card holders"
+            )
+    return "unknown unparsed state"
 
 
 def _kind_label(kind: str | None) -> str:
@@ -183,6 +231,7 @@ def apply_email_query(
     *,
     card_holders: dict[str, str] | None = None,
     matcher: BucketMatcher | None = None,
+    debug: bool = False,
 ) -> tuple[str, int | None]:
     """Apply a matched query. Returns (outcome, record_id) where outcome is
     'expense', 'income', or 'unparsed'."""
@@ -193,6 +242,17 @@ def apply_email_query(
     )
 
     if amount is None or transaction_date is None:
+        if debug:
+            logger.debug(
+                "Unparsed message %s for query %r: %s",
+                context.message_id,
+                email_query.name,
+                explain_unparsed(
+                    context,
+                    email_query,
+                    card_holders=card_holders,
+                ),
+            )
         return "unparsed", None
 
     if email_query.kind == "income":

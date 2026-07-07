@@ -9,7 +9,13 @@ from pathlib import Path
 from expenses_tracker.bucket_matcher import BucketMatcher
 from expenses_tracker.config import NotifyEmailPolicy, Settings
 from expenses_tracker.db import Database
-from expenses_tracker.email_import import build_context, preview_email_query, query_matches
+from expenses_tracker.email_import import (
+    build_context,
+    explain_match_failure,
+    explain_unparsed,
+    preview_email_query,
+    query_matches,
+)
 from expenses_tracker.models import ExpenseStatus
 from expenses_tracker.sync import ExpenseSyncService
 
@@ -350,6 +356,79 @@ class EmailQueryPersonModeTests(EmailQueryTestCase):
         self.assertIsNone(preview.card_holder)
         self.assertEqual(preview.card_last_four, "9999")
         self.assertIn("not mapped", preview.note or "")
+
+
+class EmailQueryDebugTests(EmailQueryTestCase):
+    def test_explain_match_failure(self) -> None:
+        email_query = self.db.create_email_query(
+            name="Deposits",
+            query="from:lbs",
+            kind="income",
+            match_text="ACH transaction with amount larger than",
+        )
+        context = build_context(
+            _gmail_message(
+                message_id="dbg-1",
+                subject="Alert",
+                body=LBS_WITHDRAWAL_BODY,
+                sender="alerts@lbsfcu.org",
+            )
+        )
+        reason = explain_match_failure(context, email_query)
+        self.assertIn("match text", reason)
+
+    def test_explain_unparsed_missing_amount(self) -> None:
+        email_query = self.db.create_email_query(
+            name="Broken labels",
+            query="from:lbs",
+            kind="income",
+            match_text="No amount here",
+            merchant_label="Description",
+            amount_label="NotARealLabel",
+        )
+        context = build_context(
+            _gmail_message(
+                message_id="dbg-2",
+                subject="No amount here",
+                body="Description: Deposit-ACH-A-ACME PAYROLL\nBalance: $11,512.34.",
+                sender="alerts@lbsfcu.org",
+            )
+        )
+        reason = explain_unparsed(context, email_query)
+        self.assertIn("amount", reason)
+
+    def test_debug_logs_include_skip_reasons(self) -> None:
+        from dataclasses import replace
+
+        debug_settings = replace(self.settings, email_query_debug=True)
+        self.db.create_email_query(
+            name="Deposits",
+            query="from:lbs",
+            kind="income",
+            match_text="Description: Deposit",
+            merchant_label="Description",
+            amount_label="Amount",
+        )
+        withdrawal = _gmail_message(
+            message_id="dbg-3",
+            subject="Alert",
+            body=LBS_WITHDRAWAL_BODY,
+            sender="alerts@lbsfcu.org",
+        )
+        service = ExpenseSyncService(
+            debug_settings,
+            self.db,
+            StubGmail({"from:lbs": [withdrawal]}),
+            BucketMatcher(self.db),
+            tenant=self.tenant,
+        )
+        with self.assertLogs("expenses_tracker.sync", level="INFO") as logs:
+            result = service.sync(record_notification=False)
+        self.assertEqual(result["imported"], 0)
+        output = "\n".join(logs.output)
+        self.assertIn("[email-query]", output)
+        self.assertIn("Running query", output)
+        self.assertIn("match text", output)
 
 
 if __name__ == "__main__":

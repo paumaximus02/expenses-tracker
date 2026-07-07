@@ -22,6 +22,7 @@ from expenses_tracker.buckets import (
     resolve_suggested_bucket_id,
 )
 from expenses_tracker.config import Settings, get_settings, resolve_gmail_credentials_path
+from expenses_tracker.logging_config import configure_logging
 from expenses_tracker.dates import app_month
 from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
@@ -87,6 +88,7 @@ RULES_PER_PAGE = 25
 
 def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or get_settings()
+    configure_logging(settings)
     app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
     app.secret_key = settings.secret_key
     app.config["SESSION_COOKIE_HTTPONLY"] = True

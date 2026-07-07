@@ -11,6 +11,7 @@ from expenses_tracker.auth import hash_password, validate_password
 
 from expenses_tracker.bucket_matcher import analyze_merchants
 from expenses_tracker.config import get_settings, resolve_gmail_credentials_path
+from expenses_tracker.logging_config import configure_logging
 from expenses_tracker.dates import app_month
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType
@@ -20,6 +21,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+configure_logging(get_settings())
 
 
 def _build_services(tenant_id: int = 1) -> tuple:
