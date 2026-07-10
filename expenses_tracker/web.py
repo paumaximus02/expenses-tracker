@@ -1024,6 +1024,15 @@ def create_app(settings: Settings | None = None) -> Flask:
             for _bucket_id, bucket_name, total, _count in totals
             if total > 0
         ]
+        report_totals = [
+            {
+                "label": bucket_name,
+                "value": round(total, 2),
+                "count": count,
+            }
+            for _bucket_id, bucket_name, total, count in totals
+            if total > 0
+        ]
         income_totals = db.monthly_income_totals(month, person=person)
         income_total = sum(row[2] for row in income_totals)
         income_count = sum(row[3] for row in income_totals)
@@ -1049,6 +1058,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             grand_total=grand_total,
             transaction_count=transaction_count,
             chart_slices=chart_slices,
+            report_totals=report_totals,
             income_totals=income_totals,
             income_total=income_total,
             income_count=income_count,

@@ -35,10 +35,10 @@
       {% if person %}{{ person }} · {% endif %}{{ month }}
     </p>
     <p class="report-summary-total report-amount">
-      <span class="report-amount-value">${{ "%.2f"|format(grand_total) }}</span>
+      <span class="report-amount-value" id="report-grand-total-value">${{ "%.2f"|format(grand_total) }}</span>
       <span class="report-amount-mask" aria-hidden="true">$**.**</span>
     </p>
-    <p class="report-summary-meta">
+    <p class="report-summary-meta" id="report-transaction-meta">
       {% if transaction_count %}
         {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
       {% else %}
@@ -51,7 +51,7 @@
         <span class="report-amount-value">${{ "%.2f"|format(income_total) }}</span>
         <span class="report-amount-mask" aria-hidden="true">$**.**</span>
         · Net:
-        <span class="report-amount-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
+        <span class="report-amount-value report-net-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
         <span class="report-amount-mask" aria-hidden="true">$**.**</span>
       </p>
     {% endif %}
@@ -61,15 +61,29 @@
       <div class="report-chart-visual">
         <canvas id="report-bucket-chart" aria-label="Spending by bucket"></canvas>
       </div>
-      <ul class="report-chart-legend" id="report-chart-legend"></ul>
+      <div class="report-chart-side">
+        <div class="report-chart-side-head">
+          <button type="button" class="btn btn-secondary report-chart-reset" id="report-chart-reset" hidden>
+            Reset view
+          </button>
+        </div>
+        <ul class="report-chart-legend" id="report-chart-legend"></ul>
+        <ul class="report-chart-excluded" id="report-chart-excluded" hidden></ul>
+        <p class="report-chart-empty" id="report-chart-empty" hidden>
+          All buckets excluded from this view.
+        </p>
+      </div>
     </div>
   {% endif %}
 </section>
+<div id="report-chart-context-menu" class="report-chart-context-menu" hidden role="menu">
+  <button type="button" class="report-chart-context-item" id="report-chart-context-action" role="menuitem"></button>
+</div>
 
 {% if totals %}
-  <section class="panel">
+  <section class="panel" id="report-bucket-panel">
     <h2>By bucket</h2>
-    <div class="report-table-wrap">
+    <div class="report-table-wrap" id="report-bucket-table-wrap">
       <table class="report-table responsive-table">
         <thead>
           <tr>
@@ -78,11 +92,12 @@
             <th class="num">Total</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="report-bucket-tbody">
           {% for bucket_id, bucket_name, total, count in totals %}
             <tr class="report-row-link"
                 tabindex="0"
                 role="link"
+                data-bucket-label="{{ bucket_name }}"
                 data-href="{{ url_for('expenses_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('expenses_page', month=month, person=person or none, unassigned=1) }}">
               <td data-label="Bucket">{{ bucket_name }}</td>
               <td data-label="Transactions">{{ count }}</td>
@@ -95,6 +110,9 @@
         </tbody>
       </table>
     </div>
+    <p class="report-bucket-empty" id="report-bucket-empty" hidden>
+      All buckets excluded from this view.
+    </p>
   </section>
 {% else %}
   <div class="empty-state">
@@ -143,7 +161,7 @@
             <th data-label="Summary">Net (income − expenses)</th>
             <th data-label="Entries"></th>
             <th class="num report-amount" data-label="Total">
-              <span class="report-amount-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
+              <span class="report-amount-value report-net-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
               <span class="report-amount-mask" aria-hidden="true">$**.**</span>
             </th>
           </tr>
@@ -255,9 +273,15 @@
 
   document.querySelectorAll(".report-row-link").forEach((row) => {
     row.addEventListener("click", () => {
+      if (row.hidden) {
+        return;
+      }
       window.location = row.dataset.href;
     });
     row.addEventListener("keydown", (event) => {
+      if (row.hidden) {
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         window.location = row.dataset.href;
@@ -265,9 +289,31 @@
     });
   });
 
+  const reportTotals = {{ report_totals | tojson }};
+  const incomeTotal = {{ income_total | tojson }};
+  const personFilter = {{ (person or "") | tojson }};
   const chartCanvas = document.getElementById("report-bucket-chart");
-  const chartSlices = {{ chart_slices | tojson }};
-  if (chartCanvas && chartSlices.length && window.Chart) {
+  const grandTotalValue = document.getElementById("report-grand-total-value");
+  const transactionMeta = document.getElementById("report-transaction-meta");
+  const bucketTableWrap = document.getElementById("report-bucket-table-wrap");
+  const bucketEmpty = document.getElementById("report-bucket-empty");
+  const netValues = document.querySelectorAll(".report-net-value");
+
+  function formatMoney(value) {
+    const abs = Math.abs(value).toFixed(2);
+    return value < 0 ? `-$${abs}` : `$${abs}`;
+  }
+
+  function formatTxnMeta(count) {
+    if (count) {
+      return `${count} transaction${count === 1 ? "" : "s"}`;
+    }
+    return personFilter
+      ? `No counted expenses for ${personFilter}`
+      : "No counted expenses";
+  }
+
+  if (reportTotals.length && window.Chart) {
     const palette = [
       "#0f766e",
       "#14b8a6",
@@ -282,67 +328,288 @@
       "#be123c",
       "#db2777",
     ];
-    const grandTotal = chartSlices.reduce((sum, slice) => sum + slice.value, 0);
-    const formatPercent = (value) => (
-      grandTotal ? ((value / grandTotal) * 100).toFixed(1) : "0.0"
+    const colorByLabel = new Map(
+      reportTotals.map((slice, index) => [slice.label, palette[index % palette.length]])
     );
+    const excluded = new Set();
     const legendRoot = document.getElementById("report-chart-legend");
-    chartSlices.forEach((slice, index) => {
-      const item = document.createElement("li");
-      item.className = "report-chart-legend-item";
+    const excludedRoot = document.getElementById("report-chart-excluded");
+    const emptyNote = document.getElementById("report-chart-empty");
+    const resetBtn = document.getElementById("report-chart-reset");
+    const contextMenu = document.getElementById("report-chart-context-menu");
+    const contextAction = document.getElementById("report-chart-context-action");
+    let contextLabel = null;
 
-      const swatch = document.createElement("span");
-      swatch.className = "report-chart-legend-swatch";
-      swatch.style.backgroundColor = palette[index % palette.length];
+    function visibleTotals() {
+      return reportTotals.filter((row) => !excluded.has(row.label));
+    }
 
-      const label = document.createElement("span");
-      label.className = "report-chart-legend-label";
-      label.textContent = `${slice.label} (${formatPercent(slice.value)}%)`;
+    function formatPercent(value, total) {
+      return total ? ((value / total) * 100).toFixed(1) : "0.0";
+    }
 
-      item.append(swatch, label);
-      legendRoot.appendChild(item);
+    function hideContextMenu() {
+      if (!contextMenu) {
+        return;
+      }
+      contextMenu.hidden = true;
+      contextLabel = null;
+    }
+
+    function showContextMenu(event, label) {
+      if (!contextMenu || !contextAction || !label) {
+        return;
+      }
+      event.preventDefault();
+      contextLabel = label;
+      const isExcluded = excluded.has(label);
+      contextAction.textContent = isExcluded ? "Include in chart" : "Exclude from chart";
+      contextMenu.hidden = false;
+      const menuWidth = contextMenu.offsetWidth || 180;
+      const menuHeight = contextMenu.offsetHeight || 40;
+      const left = Math.min(event.clientX, window.innerWidth - menuWidth - 8);
+      const top = Math.min(event.clientY, window.innerHeight - menuHeight - 8);
+      contextMenu.style.left = `${Math.max(8, left)}px`;
+      contextMenu.style.top = `${Math.max(8, top)}px`;
+    }
+
+    function syncResetButton() {
+      if (resetBtn) {
+        resetBtn.hidden = excluded.size === 0;
+      }
+    }
+
+    function renderLegend(slices) {
+      if (!legendRoot) {
+        return;
+      }
+      legendRoot.replaceChildren();
+      const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+      slices.forEach((slice) => {
+        const item = document.createElement("li");
+        item.className = "report-chart-legend-item";
+        item.dataset.label = slice.label;
+
+        const swatch = document.createElement("span");
+        swatch.className = "report-chart-legend-swatch";
+        swatch.style.backgroundColor = colorByLabel.get(slice.label) || palette[0];
+
+        const label = document.createElement("span");
+        label.className = "report-chart-legend-label";
+        label.textContent = `${slice.label} (${formatPercent(slice.value, total)}%)`;
+
+        item.append(swatch, label);
+        item.addEventListener("contextmenu", (event) => {
+          showContextMenu(event, slice.label);
+        });
+        legendRoot.appendChild(item);
+      });
+    }
+
+    function renderExcludedList() {
+      if (!excludedRoot) {
+        return;
+      }
+      excludedRoot.replaceChildren();
+      const excludedSlices = reportTotals.filter((slice) => excluded.has(slice.label));
+      excludedRoot.hidden = excludedSlices.length === 0;
+      excludedSlices.forEach((slice) => {
+        const item = document.createElement("li");
+        item.className = "report-chart-excluded-item";
+        item.textContent = slice.label;
+        item.title = "Right-click to include again";
+        item.addEventListener("contextmenu", (event) => {
+          showContextMenu(event, slice.label);
+        });
+        excludedRoot.appendChild(item);
+      });
+    }
+
+    function updateSummaryAndTable(slices) {
+      const filteredTotal = slices.reduce((sum, row) => sum + row.value, 0);
+      const filteredCount = slices.reduce((sum, row) => sum + row.count, 0);
+      if (grandTotalValue) {
+        grandTotalValue.textContent = formatMoney(filteredTotal);
+      }
+      if (transactionMeta) {
+        transactionMeta.textContent = formatTxnMeta(filteredCount);
+      }
+      const net = incomeTotal - filteredTotal;
+      netValues.forEach((node) => {
+        node.textContent = formatMoney(net);
+      });
+
+      document.querySelectorAll("#report-bucket-tbody tr[data-bucket-label]").forEach((row) => {
+        const label = row.dataset.bucketLabel;
+        const isExcluded = excluded.has(label);
+        row.hidden = isExcluded;
+        if (isExcluded) {
+          row.setAttribute("aria-hidden", "true");
+          row.tabIndex = -1;
+        } else {
+          row.removeAttribute("aria-hidden");
+          row.tabIndex = 0;
+        }
+      });
+      const hasVisible = slices.length > 0;
+      if (bucketTableWrap) {
+        bucketTableWrap.hidden = !hasVisible;
+      }
+      if (bucketEmpty) {
+        bucketEmpty.hidden = hasVisible;
+      }
+    }
+
+    function updateChart(slices) {
+      const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+      if (emptyNote) {
+        emptyNote.hidden = slices.length > 0;
+      }
+      if (legendRoot) {
+        legendRoot.hidden = slices.length === 0;
+      }
+      renderLegend(slices);
+      renderExcludedList();
+      if (!reportChart) {
+        return;
+      }
+      reportChart.data.labels = slices.map((slice) => slice.label);
+      reportChart.data.datasets[0].data = slices.map((slice) => slice.value);
+      reportChart.data.datasets[0].backgroundColor = slices.map(
+        (slice) => colorByLabel.get(slice.label) || palette[0]
+      );
+      reportChart.options.plugins.tooltip.callbacks.label = (context) => {
+        const slice = slices[context.dataIndex];
+        const value = slice?.value || 0;
+        const pct = formatPercent(value, total);
+        if (hideAmounts) {
+          return `${slice?.label || context.label}: ${pct}%`;
+        }
+        return `${slice?.label || context.label}: $${value.toFixed(2)} (${pct}%)`;
+      };
+      reportChart.update();
+    }
+
+    function applyExclusions() {
+      const slices = visibleTotals();
+      updateSummaryAndTable(slices);
+      updateChart(slices);
+      syncResetButton();
+    }
+
+    function excludeLabel(label) {
+      if (!label || excluded.has(label)) {
+        return;
+      }
+      excluded.add(label);
+      applyExclusions();
+    }
+
+    function includeLabel(label) {
+      if (!label || !excluded.has(label)) {
+        return;
+      }
+      excluded.delete(label);
+      applyExclusions();
+    }
+
+    if (contextAction) {
+      contextAction.addEventListener("click", () => {
+        if (!contextLabel) {
+          return;
+        }
+        if (excluded.has(contextLabel)) {
+          includeLabel(contextLabel);
+        } else {
+          excludeLabel(contextLabel);
+        }
+        hideContextMenu();
+      });
+    }
+
+    if (resetBtn) {
+      resetBtn.addEventListener("click", () => {
+        excluded.clear();
+        hideContextMenu();
+        applyExclusions();
+      });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (contextMenu && !contextMenu.contains(event.target)) {
+        hideContextMenu();
+      }
     });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        hideContextMenu();
+      }
+    });
+    window.addEventListener("scroll", hideContextMenu, true);
+    window.addEventListener("resize", hideContextMenu);
 
-    reportChart = new Chart(chartCanvas, {
-      type: "pie",
-      data: {
-        labels: chartSlices.map((slice) => slice.label),
-        datasets: [{
-          data: chartSlices.map((slice) => slice.value),
-          backgroundColor: chartSlices.map((_, index) => palette[index % palette.length]),
-          borderColor: "#fffdf9",
-          borderWidth: 2,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: {
-            display: false,
-          },
-          tooltip: {
-            callbacks: {
-              label(context) {
-                const slice = chartSlices[context.dataIndex];
-                const value = slice?.value || 0;
-                const pct = formatPercent(value);
-                if (hideAmounts) {
-                  return `${slice?.label || context.label}: ${pct}%`;
-                }
-                return `${slice?.label || context.label}: $${value.toFixed(2)} (${pct}%)`;
+    if (chartCanvas) {
+      reportChart = new Chart(chartCanvas, {
+        type: "pie",
+        data: {
+          labels: [],
+          datasets: [{
+            data: [],
+            backgroundColor: [],
+            borderColor: "#fffdf9",
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              callbacks: {
+                label(context) {
+                  return context.label || "";
+                },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    let resizeTimer;
-    window.addEventListener("resize", () => {
-      window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => reportChart.resize(), 150);
-    });
+      chartCanvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        if (!reportChart) {
+          return;
+        }
+        const elements = reportChart.getElementsAtEventForMode(
+          event,
+          "nearest",
+          { intersect: true },
+          true
+        );
+        if (!elements.length) {
+          hideContextMenu();
+          return;
+        }
+        const slices = visibleTotals();
+        const slice = slices[elements[0].index];
+        if (!slice) {
+          hideContextMenu();
+          return;
+        }
+        showContextMenu(event, slice.label);
+      });
+
+      let resizeTimer;
+      window.addEventListener("resize", () => {
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => reportChart.resize(), 150);
+      });
+    }
+
+    applyExclusions();
   }
 </script>
 {% endblock %}
