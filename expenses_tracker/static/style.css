@@ -670,6 +670,58 @@ body {
   color: #b42318;
 }
 
+.pill-done {
+  background: #e8f5ee;
+  color: #0f6b3c;
+  font-weight: 600;
+}
+
+.section-title {
+  margin: 1.5rem 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.section-title-done {
+  margin-top: 2rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.expense-card-done {
+  opacity: 0.88;
+  background: #f7faf8;
+  border-color: #d5e5db;
+  box-shadow: none;
+}
+
+.expense-card-done .merchant {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.expense-card-done .amount {
+  font-size: 1.2rem;
+  color: var(--text);
+}
+
+.expense-edit-done {
+  margin-top: 0.35rem;
+}
+
+.expense-edit-done summary {
+  cursor: pointer;
+  color: var(--accent-dark);
+  font-size: 0.9rem;
+  font-weight: 600;
+  user-select: none;
+}
+
+.expense-edit-done[open] summary {
+  margin-bottom: 0.75rem;
+}
+
 .expense-table-wrap,
 .panel-muted {
   background: var(--surface);
