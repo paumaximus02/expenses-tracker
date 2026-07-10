@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from expenses_tracker.config import NotifyEmailPolicy, Settings
-from expenses_tracker.dates import app_today, resolve_transaction_date
+from expenses_tracker.dates import app_today, format_month_label, resolve_transaction_date, shift_month
 
 
 def _settings(timezone_name: str = "America/New_York") -> Settings:
@@ -59,6 +59,16 @@ class AppTimezoneTests(unittest.TestCase):
         header = "Sun, 01 Jun 2026 03:30:00 +0000"
         parsed = resolve_transaction_date("no date in body", email_date_header=header, settings=settings)
         self.assertEqual(parsed.isoformat(), "2026-05-31")
+
+
+class MonthHelperTests(unittest.TestCase):
+    def test_shift_month_across_year_boundary(self) -> None:
+        self.assertEqual(shift_month("2026-01", -1), "2025-12")
+        self.assertEqual(shift_month("2025-12", 1), "2026-01")
+        self.assertEqual(shift_month("2026-07", 1), "2026-08")
+
+    def test_format_month_label(self) -> None:
+        self.assertEqual(format_month_label("2026-07"), "July 2026")
 
 
 if __name__ == "__main__":

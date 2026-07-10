@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from calendar import month_name
 from datetime import date, datetime
 
 try:
@@ -38,6 +39,25 @@ def app_today(settings: Settings | None = None) -> date:
 
 def app_month(settings: Settings | None = None) -> str:
     return app_today(settings).strftime("%Y-%m")
+
+
+def parse_month(month: str) -> date:
+    """Parse YYYY-MM into the first day of that month."""
+    return datetime.strptime(month, "%Y-%m").date().replace(day=1)
+
+
+def shift_month(month: str, delta: int) -> str:
+    """Return YYYY-MM shifted by delta calendar months."""
+    start = parse_month(month)
+    year = start.year + (start.month - 1 + delta) // 12
+    month_num = (start.month - 1 + delta) % 12 + 1
+    return f"{year:04d}-{month_num:02d}"
+
+
+def format_month_label(month: str) -> str:
+    """Format YYYY-MM as a readable label, e.g. July 2026."""
+    start = parse_month(month)
+    return f"{month_name[start.month]} {start.year}"
 
 
 def email_header_to_app_date(email_date_header: str, settings: Settings | None = None) -> date:

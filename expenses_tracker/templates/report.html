@@ -8,11 +8,19 @@
   </div>
 </section>
 
-<form method="get" action="{{ url_for('report') }}" class="filters" id="report-filter-form">
-  <label class="field">
-    <span>Month</span>
-    <input type="month" name="month" id="report-month" value="{{ month }}">
-  </label>
+<form method="get" action="{{ url_for('report') }}" class="filters report-filters" id="report-filter-form">
+  <div class="report-month-nav" role="group" aria-label="Month">
+    <a class="btn btn-secondary report-month-arrow"
+       href="{{ url_for('report', month=prev_month, person=person or none) }}"
+       aria-label="Previous month">‹</a>
+    <label class="report-month-picker-label">
+      <span class="visually-hidden">Jump to month</span>
+      <input type="month" name="month" id="report-month" value="{{ month }}">
+    </label>
+    <a class="btn btn-secondary report-month-arrow"
+       href="{{ url_for('report', month=next_month, person=person or none) }}"
+       aria-label="Next month">›</a>
+  </div>
   <label class="field">
     <span>Person</span>
     <select name="person" id="report-person">
@@ -31,30 +39,37 @@
 <div id="report-page">
 <section class="report-summary">
   <div class="report-summary-main">
-    <p class="report-summary-label">
-      {% if person %}{{ person }} · {% endif %}{{ month }}
-    </p>
-    <p class="report-summary-total report-amount">
-      <span class="report-amount-value" id="report-grand-total-value">${{ "%.2f"|format(grand_total) }}</span>
+    {% if person %}
+      <p class="report-summary-label">{{ person }}</p>
+    {% endif %}
+    <p class="report-hero-label" id="report-net-label">{{ net_label }}</p>
+    <p class="report-summary-total report-amount {% if net_total < 0 %}report-hero-shortfall{% else %}report-hero-leftover{% endif %}" id="report-hero-total">
+      <span class="report-amount-value" id="report-net-hero-value">${{ "%.2f"|format(net_total|abs) }}</span>
       <span class="report-amount-mask" aria-hidden="true">$**.**</span>
     </p>
-    <p class="report-summary-meta" id="report-transaction-meta">
-      {% if transaction_count %}
-        {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
-      {% else %}
-        No counted expenses{% if person %} for {{ person }}{% endif %}
-      {% endif %}
-    </p>
-    {% if income_total %}
-      <p class="report-summary-meta report-amount">
-        Income:
-        <span class="report-amount-value">${{ "%.2f"|format(income_total) }}</span>
-        <span class="report-amount-mask" aria-hidden="true">$**.**</span>
-        · Net:
-        <span class="report-amount-value report-net-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
-        <span class="report-amount-mask" aria-hidden="true">$**.**</span>
-      </p>
-    {% endif %}
+    <div class="report-summary-breakdown">
+      <div class="report-breakdown-item report-amount">
+        <span class="report-breakdown-label">Income</span>
+        <span class="report-breakdown-value">
+          <span class="report-amount-value">${{ "%.2f"|format(income_total) }}</span>
+          <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+        </span>
+      </div>
+      <div class="report-breakdown-item report-amount">
+        <span class="report-breakdown-label">Expenses</span>
+        <span class="report-breakdown-value">
+          <span class="report-amount-value" id="report-grand-total-value">${{ "%.2f"|format(grand_total) }}</span>
+          <span class="report-amount-mask" aria-hidden="true">$**.**</span>
+        </span>
+        <span class="report-breakdown-meta" id="report-transaction-meta">
+          {% if transaction_count %}
+            {{ transaction_count }} transaction{% if transaction_count != 1 %}s{% endif %}
+          {% else %}
+            No counted expenses{% if person %} for {{ person }}{% endif %}
+          {% endif %}
+        </span>
+      </div>
+    </div>
   </div>
   {% if chart_slices %}
     <div class="report-summary-chart">
@@ -158,10 +173,10 @@
             </th>
           </tr>
           <tr>
-            <th data-label="Summary">Net (income − expenses)</th>
+            <th data-label="Summary" id="report-income-net-label">{{ net_label }}</th>
             <th data-label="Entries"></th>
             <th class="num report-amount" data-label="Total">
-              <span class="report-amount-value report-net-value">{% if net_total < 0 %}-{% endif %}${{ "%.2f"|format(net_total|abs) }}</span>
+              <span class="report-amount-value report-net-value">${{ "%.2f"|format(net_total|abs) }}</span>
               <span class="report-amount-mask" aria-hidden="true">$**.**</span>
             </th>
           </tr>
@@ -297,11 +312,23 @@
   const transactionMeta = document.getElementById("report-transaction-meta");
   const bucketTableWrap = document.getElementById("report-bucket-table-wrap");
   const bucketEmpty = document.getElementById("report-bucket-empty");
+  const netHeroValue = document.getElementById("report-net-hero-value");
+  const netLabel = document.getElementById("report-net-label");
+  const incomeNetLabel = document.getElementById("report-income-net-label");
+  const heroTotal = document.getElementById("report-hero-total");
   const netValues = document.querySelectorAll(".report-net-value");
 
   function formatMoney(value) {
     const abs = Math.abs(value).toFixed(2);
     return value < 0 ? `-$${abs}` : `$${abs}`;
+  }
+
+  function formatMagnitude(value) {
+    return `$${Math.abs(value).toFixed(2)}`;
+  }
+
+  function netLabelFor(value) {
+    return value < 0 ? "Shortfall" : "Left over";
   }
 
   function formatTxnMeta(count) {
@@ -435,13 +462,28 @@
         transactionMeta.textContent = formatTxnMeta(filteredCount);
       }
       const net = incomeTotal - filteredTotal;
+      const label = netLabelFor(net);
+      const magnitude = formatMagnitude(net);
+      if (netHeroValue) {
+        netHeroValue.textContent = magnitude;
+      }
+      if (netLabel) {
+        netLabel.textContent = label;
+      }
+      if (incomeNetLabel) {
+        incomeNetLabel.textContent = label;
+      }
+      if (heroTotal) {
+        heroTotal.classList.toggle("report-hero-shortfall", net < 0);
+        heroTotal.classList.toggle("report-hero-leftover", net >= 0);
+      }
       netValues.forEach((node) => {
-        node.textContent = formatMoney(net);
+        node.textContent = magnitude;
       });
 
       document.querySelectorAll("#report-bucket-tbody tr[data-bucket-label]").forEach((row) => {
-        const label = row.dataset.bucketLabel;
-        const isExcluded = excluded.has(label);
+        const labelName = row.dataset.bucketLabel;
+        const isExcluded = excluded.has(labelName);
         row.hidden = isExcluded;
         if (isExcluded) {
           row.setAttribute("aria-hidden", "true");

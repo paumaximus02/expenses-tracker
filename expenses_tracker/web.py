@@ -23,7 +23,7 @@ from expenses_tracker.buckets import (
 )
 from expenses_tracker.config import Settings, get_settings, resolve_gmail_credentials_path
 from expenses_tracker.logging_config import configure_logging
-from expenses_tracker.dates import app_month
+from expenses_tracker.dates import app_month, format_month_label, shift_month
 from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
@@ -1047,12 +1047,16 @@ def create_app(settings: Settings | None = None) -> Flask:
             }
             | set(_income_persons(db, sync.tenant))
         )
+        net_total = income_total - grand_total
         return render_template(
             "report.html",
             totals=totals,
             excluded_totals=excluded_totals,
             excluded_total=excluded_total,
             month=month,
+            month_label=format_month_label(month),
+            prev_month=shift_month(month, -1),
+            next_month=shift_month(month, 1),
             person=person,
             holders=holders,
             grand_total=grand_total,
@@ -1063,7 +1067,8 @@ def create_app(settings: Settings | None = None) -> Flask:
             income_total=income_total,
             income_count=income_count,
             income_person_totals=income_person_totals,
-            net_total=income_total - grand_total,
+            net_total=net_total,
+            net_label="Left over" if net_total >= 0 else "Shortfall",
             page="report",
         )
 
