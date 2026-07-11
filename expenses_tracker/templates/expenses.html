@@ -13,8 +13,8 @@
     <p class="filter-banner">
       Showing <strong>{{ bucket_filter_name }}</strong>
       {% if person %} · {{ person }}{% endif %}
-      · {{ month }}
-      <a href="{{ url_for('expenses_page', month=month, person=person or none, q=search, status=status_filter) }}">Clear bucket filter</a>
+      · {% if month_range_label %}{{ month_range_label }}{% elif month_from and month %}{{ month_from }} – {{ month }}{% else %}{{ month }}{% endif %}
+      <a href="{{ url_for('expenses_page', month=month, month_from=month_from or none, person=person or none, q=search, status=status_filter) }}">Clear bucket filter</a>
     </p>
   {% endif %}
   <label class="field field-search">
@@ -22,9 +22,12 @@
     <input type="search" name="q" id="expenses-search" value="{{ search }}" placeholder="Merchant or amount">
   </label>
   <label class="field">
-    <span>Month</span>
+    <span>{% if month_from %}End month{% else %}Month{% endif %}</span>
     <input type="month" name="month" id="expenses-month" value="{{ month }}">
   </label>
+  {% if month_from %}
+    <input type="hidden" name="month_from" value="{{ month_from }}">
+  {% endif %}
   <label class="field">
     <span>Status</span>
     <select name="status" id="expenses-status">
@@ -78,6 +81,9 @@
                 <summary>Edit</summary>
                 <form method="post" action="{{ url_for('update_expense', expense_id=expense.id) }}" class="inline-form">
                   <input type="hidden" name="month" value="{{ month }}">
+                  {% if month_from %}
+                    <input type="hidden" name="month_from" value="{{ month_from }}">
+                  {% endif %}
                   <input type="hidden" name="status" value="{{ status_filter }}">
                   <input type="hidden" name="q" value="{{ search }}">
                   <input type="hidden" name="person" value="{{ person }}">
@@ -102,6 +108,9 @@
                       class="inline-form expense-delete-form"
                       onsubmit="return confirm('Delete this transaction permanently?');">
                   <input type="hidden" name="month" value="{{ month }}">
+                  {% if month_from %}
+                    <input type="hidden" name="month_from" value="{{ month_from }}">
+                  {% endif %}
                   <input type="hidden" name="status" value="{{ status_filter }}">
                   <input type="hidden" name="q" value="{{ search }}">
                   <input type="hidden" name="person" value="{{ person }}">

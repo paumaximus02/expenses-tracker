@@ -11,9 +11,13 @@
 
 <form method="get" action="{{ url_for('income_page') }}" class="filters" id="income-filter-form">
   <label class="field">
-    <span>Allocated month</span>
+    <span>{% if month_from %}End month{% else %}Allocated month{% endif %}</span>
     <input type="month" name="month" value="{{ month }}">
   </label>
+  {% if month_from %}
+    <input type="hidden" name="month_from" value="{{ month_from }}">
+    <p class="filters-hint">Showing {{ month_range_label or (month_from ~ ' – ' ~ month) }}</p>
+  {% endif %}
   <label class="field">
     <span>Person</span>
     <select name="person">
@@ -74,6 +78,9 @@
                 <summary>Edit</summary>
                 <form method="post" action="{{ url_for('update_income', income_id=income.id) }}" class="inline-form">
                   <input type="hidden" name="filter_month" value="{{ month }}">
+                  {% if month_from %}
+                    <input type="hidden" name="filter_month_from" value="{{ month_from }}">
+                  {% endif %}
                   <input type="hidden" name="filter_person" value="{{ person }}">
                   <input type="hidden" name="filter_bucket_id" value="{{ bucket_id or '' }}">
                   <label class="field">
@@ -100,6 +107,9 @@
                       class="inline-form expense-delete-form"
                       onsubmit="return confirm('Delete this income entry permanently?');">
                   <input type="hidden" name="filter_month" value="{{ month }}">
+                  {% if month_from %}
+                    <input type="hidden" name="filter_month_from" value="{{ month_from }}">
+                  {% endif %}
                   <input type="hidden" name="filter_person" value="{{ person }}">
                   <input type="hidden" name="filter_bucket_id" value="{{ bucket_id or '' }}">
                   <button type="submit" class="btn btn-danger">Delete</button>

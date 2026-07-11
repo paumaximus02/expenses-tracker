@@ -1434,6 +1434,7 @@ class Database:
         *,
         status: ExpenseStatus | None = None,
         month: str | None = None,
+        month_from: str | None = None,
         search: str | None = None,
         bucket_id: int | None = None,
         unassigned: bool = False,
@@ -1445,7 +1446,13 @@ class Database:
         if status is not None:
             query += " AND e.status = ?"
             params.append(status.value)
-        if month:
+        if month and month_from:
+            query += (
+                " AND strftime('%Y-%m', e.transaction_date) >= ?"
+                " AND strftime('%Y-%m', e.transaction_date) <= ?"
+            )
+            params.extend([month_from, month])
+        elif month:
             query += " AND strftime('%Y-%m', e.transaction_date) = ?"
             params.append(month)
         if unassigned:
@@ -2193,12 +2200,16 @@ class Database:
         self,
         *,
         month: str | None = None,
+        month_from: str | None = None,
         person: str | None = None,
         bucket_id: int | None = None,
     ) -> list[Income]:
         query = self._INCOME_SELECT + " WHERE i.tenant_id = ?"
         params: list[object] = [self._require_tenant()]
-        if month:
+        if month and month_from:
+            query += " AND i.allocated_month >= ? AND i.allocated_month <= ?"
+            params.extend([month_from, month])
+        elif month:
             query += " AND i.allocated_month = ?"
             params.append(month)
         if person:

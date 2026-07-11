@@ -130,7 +130,7 @@
                 tabindex="0"
                 role="link"
                 data-bucket-label="{{ bucket_name }}"
-                data-href="{{ url_for('expenses_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('expenses_page', month=month, person=person or none, unassigned=1) }}">
+                data-href="{% if view == 'ytd' %}{{ url_for('expenses_page', month=month, month_from=ytd_start_month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('expenses_page', month=month, month_from=ytd_start_month, person=person or none, unassigned=1) }}{% else %}{{ url_for('expenses_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('expenses_page', month=month, person=person or none, unassigned=1) }}{% endif %}">
               <td data-label="Bucket">{{ bucket_name }}</td>
               <td data-label="Transactions">{{ count }}</td>
               <td class="num report-amount" data-label="Total">
@@ -172,7 +172,7 @@
             <tr class="report-row-link"
                 tabindex="0"
                 role="link"
-                data-href="{{ url_for('income_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('income_page', month=month, person=person or none) }}">
+                data-href="{% if view == 'ytd' %}{{ url_for('income_page', month=month, month_from=ytd_start_month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('income_page', month=month, month_from=ytd_start_month, person=person or none) }}{% else %}{{ url_for('income_page', month=month, person=person or none, bucket_id=bucket_id) if bucket_id else url_for('income_page', month=month, person=person or none) }}{% endif %}">
               <td data-label="Bucket">{{ bucket_name }}</td>
               <td data-label="Entries">{{ count }}</td>
               <td class="num report-amount" data-label="Total">
@@ -219,7 +219,7 @@
               <tr class="report-row-link"
                   tabindex="0"
                   role="link"
-                  data-href="{{ url_for('income_page', month=month, person=member) if member else url_for('income_page', month=month) }}">
+                  data-href="{% if view == 'ytd' %}{{ url_for('income_page', month=month, month_from=ytd_start_month, person=member) if member else url_for('income_page', month=month, month_from=ytd_start_month) }}{% else %}{{ url_for('income_page', month=month, person=member) if member else url_for('income_page', month=month) }}{% endif %}">
                 <td data-label="Person">{{ member or "Unassigned" }}</td>
                 <td data-label="Entries">{{ count }}</td>
                 <td class="num report-amount" data-label="Total">

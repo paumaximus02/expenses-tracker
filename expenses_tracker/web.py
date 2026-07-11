@@ -70,12 +70,26 @@ def _safe_next_url(raw: str) -> str:
     return url_for("review")
 
 
+def _valid_month_from(raw: str | None, end_month: str | None) -> str | None:
+    """Return month_from when it is a valid YYYY-MM on or before end_month."""
+    if not raw or not end_month:
+        return None
+    value = raw.strip()
+    if not _valid_month(value) or value > end_month:
+        return None
+    return value
+
+
 def _expense_filter_redirect_kwargs(form) -> dict[str, str | int]:
+    month = form.get("month", app_month())
     kwargs: dict[str, str | int] = {
-        "month": form.get("month", app_month()),
+        "month": month,
         "q": form.get("q", "").strip(),
         "status": form.get("status", "").strip(),
     }
+    month_from = _valid_month_from(form.get("month_from"), month)
+    if month_from:
+        kwargs["month_from"] = month_from
     person = form.get("person", "").strip()
     if person:
         kwargs["person"] = person
@@ -411,6 +425,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     def expenses_page():
         db, _ = _services()
         month = _selected_month()
+        month_from = _valid_month_from(request.args.get("month_from"), month)
         status_filter = request.args.get("status", "").strip()
         search = request.args.get("q", "").strip()
         person = request.args.get("person", "").strip()
@@ -421,6 +436,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         expenses = db.list_expenses(
             status=status,
             month=month or None,
+            month_from=month_from,
             search=search or None,
             bucket_id=bucket_id,
             unassigned=unassigned,
@@ -433,11 +449,18 @@ def create_app(settings: Settings | None = None) -> Flask:
         elif bucket_id is not None:
             bucket = db.get_bucket(bucket_id)
             bucket_filter_name = bucket.display_path if bucket else None
+        month_range_label = (
+            format_ytd_range_label(month)
+            if month_from and month and month_from == ytd_start_month(month)
+            else None
+        )
         return render_template(
             "expenses.html",
             expenses=expenses,
             bucket_options=bucket_options,
             month=month,
+            month_from=month_from,
+            month_range_label=month_range_label,
             status_filter=status_filter,
             search=search,
             person=person,
@@ -512,12 +535,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.post("/expenses/<int:expense_id>/delete")
     def delete_expense(expense_id: int):
         db, _ = _services()
-        month = request.form.get("month", app_month(settings))
-        status_filter = request.form.get("status", "").strip()
-        search = request.form.get("q", "").strip()
-        person = request.form.get("person", "").strip()
-        unassigned = request.form.get("unassigned") == "1"
-        filter_bucket_id = request.form.get("filter_bucket_id", "").strip()
+        redirect_kwargs = _expense_filter_redirect_kwargs(request.form)
         try:
             expense = db.get_expense(expense_id)
             if expense is None:
@@ -526,39 +544,38 @@ def create_app(settings: Settings | None = None) -> Flask:
             flash(f"Deleted {format_merchant(expense.merchant)}.", "success")
         except ValueError as exc:
             flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "expenses_page",
-                month=month,
-                status=status_filter,
-                q=search,
-                person=person,
-                bucket_id=filter_bucket_id or None,
-                unassigned=1 if unassigned else None,
-            )
-        )
+        return redirect(url_for("expenses_page", **redirect_kwargs))
 
     @app.route("/income")
     def income_page():
         db, sync = _services()
         month = _selected_month()
+        month_from = _valid_month_from(request.args.get("month_from"), month)
         person = request.args.get("person", "").strip()
         bucket_id_raw = request.args.get("bucket_id", "").strip()
         bucket_id = int(bucket_id_raw) if bucket_id_raw else None
         incomes = db.list_incomes(
             month=month or None,
+            month_from=month_from,
             person=person or None,
             bucket_id=bucket_id,
         )
         income_buckets = db.list_income_buckets()
         persons = _income_persons(db, sync.tenant)
         total = sum(income.amount for income in incomes)
+        month_range_label = (
+            format_ytd_range_label(month)
+            if month_from and month and month_from == ytd_start_month(month)
+            else None
+        )
         return render_template(
             "income.html",
             incomes=incomes,
             income_buckets=income_buckets,
             persons=persons,
             month=month,
+            month_from=month_from,
+            month_range_label=month_range_label,
             person=person,
             bucket_id=bucket_id,
             total=total,
@@ -571,11 +588,15 @@ def create_app(settings: Settings | None = None) -> Flask:
         allocated_month = request.form.get("allocated_month", "").strip()
         bucket_id_raw = request.form.get("bucket_id", "").strip()
         person = request.form.get("person", "").strip()
+        filter_month = request.form.get("filter_month", app_month(settings))
         redirect_kwargs = {
-            "month": request.form.get("filter_month", app_month(settings)),
+            "month": filter_month,
             "person": request.form.get("filter_person", "").strip() or None,
             "bucket_id": request.form.get("filter_bucket_id", "").strip() or None,
         }
+        month_from = _valid_month_from(request.form.get("filter_month_from"), filter_month)
+        if month_from:
+            redirect_kwargs["month_from"] = month_from
         try:
             if not _valid_month(allocated_month):
                 raise ValueError("Allocated month must look like 2026-06.")
@@ -593,11 +614,15 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.post("/income/<int:income_id>/delete")
     def delete_income(income_id: int):
         db, _ = _services()
+        filter_month = request.form.get("filter_month", app_month(settings))
         redirect_kwargs = {
-            "month": request.form.get("filter_month", app_month(settings)),
+            "month": filter_month,
             "person": request.form.get("filter_person", "").strip() or None,
             "bucket_id": request.form.get("filter_bucket_id", "").strip() or None,
         }
+        month_from = _valid_month_from(request.form.get("filter_month_from"), filter_month)
+        if month_from:
+            redirect_kwargs["month_from"] = month_from
         try:
             income = db.get_income(income_id)
             if income is None:

@@ -163,10 +163,49 @@ class YtdDatabaseTests(unittest.TestCase):
         self.assertEqual(nets[2]["net"], 200.0)
 
 
+    def test_list_expenses_month_from_range(self) -> None:
+        self._insert_expense(
+            message_id="e-jan",
+            transaction_date=date(2026, 1, 10),
+            amount=40.0,
+        )
+        self._insert_expense(
+            message_id="e-mar",
+            transaction_date=date(2026, 3, 5),
+            amount=60.0,
+        )
+        self._insert_expense(
+            message_id="e-aug",
+            transaction_date=date(2026, 8, 1),
+            amount=100.0,
+        )
+        ranged = self.db.list_expenses(month="2026-03", month_from="2026-01")
+        self.assertEqual(len(ranged), 2)
+        self.assertEqual(sum(e.amount for e in ranged), 100.0)
+
+
 class YtdReportRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         db_path = Path(self._tmp.name) / "test.db"
+        global_db = Database(db_path)
+        tenant_id = global_db.get_default_tenant_id()
+        self.db = Database(db_path, tenant_id=tenant_id)
+        self.bucket = self.db.create_bucket("Groceries")
+        self.db.insert_expense(
+            gmail_message_id="e1",
+            transaction_date=date(2026, 2, 10),
+            merchant="Store",
+            merchant_normalized="store",
+            amount=25.0,
+            currency="USD",
+            bucket_id=self.bucket.id,
+            suggested_bucket_id=None,
+            status=ExpenseStatus.CONFIRMED,
+            email_subject="Alert",
+            email_from="bank@example.com",
+            card_holder="Juan",
+        )
         app = create_app(_settings(db_path))
         app.config["TESTING"] = True
         self.client = app.test_client()
@@ -181,12 +220,37 @@ class YtdReportRouteTests(unittest.TestCase):
         self.assertIn(b"Jan\xe2\x80\x93Jul 2026", response.data)
         self.assertIn(b'id="report-ytd-net-chart"', response.data)
         self.assertIn(b"Year to date", response.data)
+        self.assertIn(b"month_from=2026-01", response.data)
 
     def test_report_month_view_has_no_ytd_chart(self) -> None:
         response = self.client.get("/report?view=month&month=2026-07")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Monthly report", response.data)
         self.assertNotIn(b'id="report-ytd-net-chart"', response.data)
+        self.assertNotIn(b"month_from=2026-01", response.data)
+
+    def test_expenses_ytd_range_lists_across_months(self) -> None:
+        self.db.insert_expense(
+            gmail_message_id="e-jan",
+            transaction_date=date(2026, 1, 5),
+            merchant="Store",
+            merchant_normalized="store",
+            amount=10.0,
+            currency="USD",
+            bucket_id=self.bucket.id,
+            suggested_bucket_id=None,
+            status=ExpenseStatus.CONFIRMED,
+            email_subject="Alert",
+            email_from="bank@example.com",
+            card_holder="Juan",
+        )
+        response = self.client.get(
+            f"/expenses?month=2026-07&month_from=2026-01&bucket_id={self.bucket.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Jan\xe2\x80\x93Jul 2026", response.data)
+        self.assertIn(b"$25.00", response.data)
+        self.assertIn(b"$10.00", response.data)
 
 
 if __name__ == "__main__":
