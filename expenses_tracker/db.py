@@ -1687,6 +1687,192 @@ class Database:
             rows = conn.execute(query, params).fetchall()
         return [(row["bucket_name"], row["total"], row["count"]) for row in rows]
 
+    def ytd_expense_totals(
+        self,
+        end_month: str,
+        *,
+        card_holder: str | None = None,
+    ) -> list[tuple[int | None, str, float, int]]:
+        tenant_id = self._require_tenant()
+        start_month = f"{end_month[:4]}-01"
+        query = f"""
+            SELECT e.bucket_id,
+                   CASE
+                       WHEN bp.name IS NOT NULL THEN bp.name || ' › ' || b.name
+                       ELSE COALESCE(b.name, 'Unassigned')
+                   END AS bucket_name,
+                   SUM(e.amount) AS total,
+                   COUNT(*) AS count
+            FROM expenses e
+            LEFT JOIN buckets b ON b.id = e.bucket_id AND b.tenant_id = e.tenant_id
+            LEFT JOIN buckets bp ON bp.id = b.parent_id AND bp.tenant_id = e.tenant_id
+            WHERE strftime('%Y-%m', e.transaction_date) >= ?
+              AND strftime('%Y-%m', e.transaction_date) <= ?
+            {self._REPORTABLE_WHERE}
+        """
+        params: list[object] = [start_month, end_month, tenant_id]
+        if card_holder is not None:
+            query += " AND e.card_holder = ?"
+            params.append(card_holder)
+        query += " GROUP BY e.bucket_id ORDER BY total DESC"
+        with self.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            (row["bucket_id"], row["bucket_name"], row["total"], row["count"])
+            for row in rows
+        ]
+
+    def ytd_excluded_totals(
+        self,
+        end_month: str,
+        *,
+        card_holder: str | None = None,
+    ) -> list[tuple[str, float, int]]:
+        tenant_id = self._require_tenant()
+        start_month = f"{end_month[:4]}-01"
+        query = """
+            SELECT CASE
+                       WHEN bp.name IS NOT NULL THEN bp.name || ' › ' || b.name
+                       WHEN b.name IS NOT NULL THEN b.name
+                       ELSE 'Unassigned'
+                   END AS bucket_name,
+                   SUM(e.amount) AS total,
+                   COUNT(*) AS count
+            FROM expenses e
+            LEFT JOIN buckets b ON b.id = e.bucket_id AND b.tenant_id = e.tenant_id
+            LEFT JOIN buckets bp ON bp.id = b.parent_id AND bp.tenant_id = e.tenant_id
+            WHERE strftime('%Y-%m', e.transaction_date) >= ?
+              AND strftime('%Y-%m', e.transaction_date) <= ?
+              AND e.tenant_id = ?
+              AND (
+                    COALESCE(e.exclude_from_report, 0) = 1
+                    OR COALESCE(b.exclude_from_report, 0) = 1
+                  )
+        """
+        params: list[object] = [start_month, end_month, tenant_id]
+        if card_holder is not None:
+            query += " AND e.card_holder = ?"
+            params.append(card_holder)
+        query += " GROUP BY bucket_name ORDER BY total DESC"
+        with self.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [(row["bucket_name"], row["total"], row["count"]) for row in rows]
+
+    def ytd_income_totals(
+        self,
+        end_month: str,
+        *,
+        person: str | None = None,
+    ) -> list[tuple[int | None, str, float, int]]:
+        start_month = f"{end_month[:4]}-01"
+        query = """
+            SELECT i.bucket_id,
+                   COALESCE(b.name, 'Unassigned') AS bucket_name,
+                   SUM(i.amount) AS total,
+                   COUNT(*) AS count
+            FROM incomes i
+            LEFT JOIN income_buckets b ON b.id = i.bucket_id AND b.tenant_id = i.tenant_id
+            WHERE i.allocated_month >= ? AND i.allocated_month <= ? AND i.tenant_id = ?
+        """
+        params: list[object] = [start_month, end_month, self._require_tenant()]
+        if person is not None:
+            query += " AND i.person = ?"
+            params.append(person)
+        query += " GROUP BY i.bucket_id ORDER BY total DESC"
+        with self.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            (row["bucket_id"], row["bucket_name"], row["total"], row["count"])
+            for row in rows
+        ]
+
+    def ytd_income_person_totals(
+        self,
+        end_month: str,
+    ) -> list[tuple[str | None, float, int]]:
+        start_month = f"{end_month[:4]}-01"
+        query = """
+            SELECT i.person,
+                   SUM(i.amount) AS total,
+                   COUNT(*) AS count
+            FROM incomes i
+            WHERE i.allocated_month >= ? AND i.allocated_month <= ? AND i.tenant_id = ?
+            GROUP BY i.person
+            ORDER BY total DESC
+        """
+        with self.connection() as conn:
+            rows = conn.execute(
+                query,
+                (start_month, end_month, self._require_tenant()),
+            ).fetchall()
+        return [(row["person"], row["total"], row["count"]) for row in rows]
+
+    def monthly_nets_for_ytd(
+        self,
+        end_month: str,
+        *,
+        card_holder: str | None = None,
+        person: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return per-month income/expenses/net from Jan through end_month."""
+        from calendar import month_name
+
+        year = end_month[:4]
+        start_month = f"{year}-01"
+        end = datetime.strptime(end_month, "%Y-%m").date()
+        months = [f"{year}-{month:02d}" for month in range(1, end.month + 1)]
+
+        tenant_id = self._require_tenant()
+        expense_query = f"""
+            SELECT strftime('%Y-%m', e.transaction_date) AS month_key,
+                   SUM(e.amount) AS total
+            FROM expenses e
+            LEFT JOIN buckets b ON b.id = e.bucket_id AND b.tenant_id = e.tenant_id
+            WHERE strftime('%Y-%m', e.transaction_date) >= ?
+              AND strftime('%Y-%m', e.transaction_date) <= ?
+            {self._REPORTABLE_WHERE}
+        """
+        expense_params: list[object] = [start_month, end_month, tenant_id]
+        if card_holder is not None:
+            expense_query += " AND e.card_holder = ?"
+            expense_params.append(card_holder)
+        expense_query += " GROUP BY month_key"
+
+        income_query = """
+            SELECT i.allocated_month AS month_key,
+                   SUM(i.amount) AS total
+            FROM incomes i
+            WHERE i.allocated_month >= ? AND i.allocated_month <= ? AND i.tenant_id = ?
+        """
+        income_params: list[object] = [start_month, end_month, tenant_id]
+        if person is not None:
+            income_query += " AND i.person = ?"
+            income_params.append(person)
+        income_query += " GROUP BY month_key"
+
+        with self.connection() as conn:
+            expense_rows = conn.execute(expense_query, expense_params).fetchall()
+            income_rows = conn.execute(income_query, income_params).fetchall()
+
+        expenses_by_month = {row["month_key"]: float(row["total"]) for row in expense_rows}
+        income_by_month = {row["month_key"]: float(row["total"]) for row in income_rows}
+
+        results: list[dict[str, object]] = []
+        for month_key in months:
+            income = income_by_month.get(month_key, 0.0)
+            expenses = expenses_by_month.get(month_key, 0.0)
+            month_num = int(month_key[5:7])
+            results.append(
+                {
+                    "month": month_key,
+                    "label": month_name[month_num][:3],
+                    "income": round(income, 2),
+                    "expenses": round(expenses, 2),
+                    "net": round(income - expenses, 2),
+                }
+            )
+        return results
+
     # --- Income buckets ---
 
     def _row_to_income_bucket(self, row: sqlite3.Row) -> IncomeBucket:

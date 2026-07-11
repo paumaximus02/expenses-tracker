@@ -3,22 +3,31 @@
 {% block content %}
 <section class="page-head">
   <div>
-    <h1>Monthly report</h1>
-    <p class="subtitle">Out-of-pocket totals (reimbursements excluded)</p>
+    <h1>{% if view == 'ytd' %}Year-to-date report{% else %}Monthly report{% endif %}</h1>
+    <p class="subtitle">
+      {% if view == 'ytd' %}{{ range_label }} · {% endif %}Out-of-pocket totals (reimbursements excluded)
+    </p>
   </div>
 </section>
 
 <form method="get" action="{{ url_for('report') }}" class="filters report-filters" id="report-filter-form">
-  <div class="report-month-nav" role="group" aria-label="Month">
+  <input type="hidden" name="view" value="{{ view }}">
+  <div class="report-view-toggle" role="group" aria-label="Report view">
+    <a class="report-view-option{% if view == 'month' %} is-active{% endif %}"
+       href="{{ url_for('report', month=month, person=person or none, view='month') }}">Month</a>
+    <a class="report-view-option{% if view == 'ytd' %} is-active{% endif %}"
+       href="{{ url_for('report', month=month, person=person or none, view='ytd') }}">Year to date</a>
+  </div>
+  <div class="report-month-nav" role="group" aria-label="{% if view == 'ytd' %}End month{% else %}Month{% endif %}">
     <a class="btn btn-secondary report-month-arrow"
-       href="{{ url_for('report', month=prev_month, person=person or none) }}"
+       href="{{ url_for('report', month=prev_month, person=person or none, view=view) }}"
        aria-label="Previous month">‹</a>
     <label class="report-month-picker-label">
-      <span class="visually-hidden">Jump to month</span>
+      <span class="visually-hidden">{% if view == 'ytd' %}End month{% else %}Jump to month{% endif %}</span>
       <input type="month" name="month" id="report-month" value="{{ month }}">
     </label>
     <a class="btn btn-secondary report-month-arrow"
-       href="{{ url_for('report', month=next_month, person=person or none) }}"
+       href="{{ url_for('report', month=next_month, person=person or none, view=view) }}"
        aria-label="Next month">›</a>
   </div>
   <label class="field">
@@ -42,21 +51,21 @@
     {% if person %}
       <p class="report-summary-label">{{ person }}</p>
     {% endif %}
-    <p class="report-hero-label" id="report-net-label">{{ net_label }}</p>
+    <p class="report-hero-label" id="report-net-label">{% if view == 'ytd' %}YTD {% endif %}{{ net_label }}</p>
     <p class="report-summary-total report-amount {% if net_total < 0 %}report-hero-shortfall{% else %}report-hero-leftover{% endif %}" id="report-hero-total">
       <span class="report-amount-value" id="report-net-hero-value">${{ "%.2f"|format(net_total|abs) }}</span>
       <span class="report-amount-mask" aria-hidden="true">$**.**</span>
     </p>
     <div class="report-summary-breakdown">
       <div class="report-breakdown-item report-amount">
-        <span class="report-breakdown-label">Income</span>
+        <span class="report-breakdown-label">{% if view == 'ytd' %}YTD {% endif %}Income</span>
         <span class="report-breakdown-value">
           <span class="report-amount-value">${{ "%.2f"|format(income_total) }}</span>
           <span class="report-amount-mask" aria-hidden="true">$**.**</span>
         </span>
       </div>
       <div class="report-breakdown-item report-amount">
-        <span class="report-breakdown-label">Expenses</span>
+        <span class="report-breakdown-label">{% if view == 'ytd' %}YTD {% endif %}Expenses</span>
         <span class="report-breakdown-value">
           <span class="report-amount-value" id="report-grand-total-value">${{ "%.2f"|format(grand_total) }}</span>
           <span class="report-amount-mask" aria-hidden="true">$**.**</span>
@@ -71,6 +80,14 @@
       </div>
     </div>
   </div>
+  {% if view == 'ytd' and monthly_nets %}
+    <div class="report-ytd-bars">
+      <h2 class="report-ytd-bars-title">Monthly net</h2>
+      <div class="report-ytd-bars-visual">
+        <canvas id="report-ytd-net-chart" aria-label="Monthly net for {{ range_label }}"></canvas>
+      </div>
+    </div>
+  {% endif %}
   {% if chart_slices %}
     <div class="report-summary-chart">
       <div class="report-chart-visual">
@@ -138,7 +155,9 @@
 {% if income_totals %}
   <section class="panel">
     <h2>Income</h2>
-    <p class="subtitle">Allocated to {{ month }}{% if person %} · {{ person }}{% endif %}</p>
+    <p class="subtitle">
+      {% if view == 'ytd' %}Allocated {{ range_label }}{% else %}Allocated to {{ month }}{% endif %}{% if person %} · {{ person }}{% endif %}
+    </p>
     <div class="report-table-wrap">
       <table class="report-table responsive-table">
         <thead>
@@ -173,7 +192,7 @@
             </th>
           </tr>
           <tr>
-            <th data-label="Summary" id="report-income-net-label">{{ net_label }}</th>
+            <th data-label="Summary" id="report-income-net-label">{% if view == 'ytd' %}YTD {% endif %}{{ net_label }}</th>
             <th data-label="Entries"></th>
             <th class="num report-amount" data-label="Total">
               <span class="report-amount-value report-net-value">${{ "%.2f"|format(net_total|abs) }}</span>
@@ -327,8 +346,12 @@
     return `$${Math.abs(value).toFixed(2)}`;
   }
 
+  const reportView = {{ view | tojson }};
+  const monthlyNets = {{ monthly_nets | tojson }};
+
   function netLabelFor(value) {
-    return value < 0 ? "Shortfall" : "Left over";
+    const base = value < 0 ? "Shortfall" : "Left over";
+    return reportView === "ytd" ? `YTD ${base}` : base;
   }
 
   function formatTxnMeta(count) {
@@ -652,6 +675,68 @@
     }
 
     applyExclusions();
+  }
+
+  const ytdNetCanvas = document.getElementById("report-ytd-net-chart");
+  if (ytdNetCanvas && monthlyNets.length && window.Chart) {
+    const positiveColor = "#0f766e";
+    const negativeColor = "#b42318";
+    new Chart(ytdNetCanvas, {
+      type: "bar",
+      data: {
+        labels: monthlyNets.map((row) => row.label),
+        datasets: [{
+          data: monthlyNets.map((row) => row.net),
+          backgroundColor: monthlyNets.map((row) =>
+            row.net < 0 ? negativeColor : positiveColor
+          ),
+          borderRadius: 4,
+          maxBarThickness: 48,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label(context) {
+                const row = monthlyNets[context.dataIndex];
+                if (!row) {
+                  return "";
+                }
+                if (hideAmounts) {
+                  return row.net < 0 ? "Shortfall" : "Left over";
+                }
+                const sign = row.net < 0 ? "-" : "";
+                return `Net: ${sign}$${Math.abs(row.net).toFixed(2)}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: { color: "#64748b" },
+          },
+          y: {
+            grid: { color: "rgba(15, 23, 42, 0.08)" },
+            ticks: {
+              color: "#64748b",
+              callback(value) {
+                if (hideAmounts) {
+                  return "";
+                }
+                const num = Number(value);
+                const sign = num < 0 ? "-" : "";
+                return `${sign}$${Math.abs(num)}`;
+              },
+            },
+          },
+        },
+      },
+    });
   }
 </script>
 {% endblock %}

@@ -60,6 +60,34 @@ def format_month_label(month: str) -> str:
     return f"{month_name[start.month]} {start.year}"
 
 
+def ytd_start_month(end_month: str) -> str:
+    """Return January of the calendar year for end_month (YYYY-MM)."""
+    start = parse_month(end_month)
+    return f"{start.year:04d}-01"
+
+
+def months_in_ytd(end_month: str) -> list[str]:
+    """Return YYYY-MM values from January through end_month inclusive."""
+    start = parse_month(end_month)
+    return [f"{start.year:04d}-{month:02d}" for month in range(1, start.month + 1)]
+
+
+def format_ytd_range_label(end_month: str) -> str:
+    """Format a YTD range label, e.g. Jan–Jul 2026."""
+    start = parse_month(end_month)
+    start_abbr = month_name[1][:3]
+    end_abbr = month_name[start.month][:3]
+    if start.month == 1:
+        return f"{start_abbr} {start.year}"
+    return f"{start_abbr}–{end_abbr} {start.year}"
+
+
+def format_month_short_label(month: str) -> str:
+    """Format YYYY-MM as a short month label, e.g. Jan."""
+    start = parse_month(month)
+    return month_name[start.month][:3]
+
+
 def email_header_to_app_date(email_date_header: str, settings: Settings | None = None) -> date:
     from email.utils import parsedate_to_datetime
 

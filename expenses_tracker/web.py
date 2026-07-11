@@ -23,7 +23,13 @@ from expenses_tracker.buckets import (
 )
 from expenses_tracker.config import Settings, get_settings, resolve_gmail_credentials_path
 from expenses_tracker.logging_config import configure_logging
-from expenses_tracker.dates import app_month, format_month_label, shift_month
+from expenses_tracker.dates import (
+    app_month,
+    format_month_label,
+    format_ytd_range_label,
+    shift_month,
+    ytd_start_month,
+)
 from expenses_tracker.display import format_merchant
 from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
@@ -1011,8 +1017,35 @@ def create_app(settings: Settings | None = None) -> Flask:
         db, sync = _services()
         month = _selected_month() or app_month(settings)
         person = request.args.get("person") or None
-        totals = db.monthly_totals(month, card_holder=person)
-        excluded_totals = db.monthly_excluded_totals(month, card_holder=person)
+        view = request.args.get("view", "month").strip().lower()
+        if view not in ("month", "ytd"):
+            view = "month"
+
+        if view == "ytd":
+            totals = db.ytd_expense_totals(month, card_holder=person)
+            excluded_totals = db.ytd_excluded_totals(month, card_holder=person)
+            income_totals = db.ytd_income_totals(month, person=person)
+            income_person_totals = (
+                db.ytd_income_person_totals(month) if not person else []
+            )
+            monthly_nets = db.monthly_nets_for_ytd(
+                month,
+                card_holder=person,
+                person=person,
+            )
+            range_label = format_ytd_range_label(month)
+            start_month = ytd_start_month(month)
+        else:
+            totals = db.monthly_totals(month, card_holder=person)
+            excluded_totals = db.monthly_excluded_totals(month, card_holder=person)
+            income_totals = db.monthly_income_totals(month, person=person)
+            income_person_totals = (
+                db.monthly_income_person_totals(month) if not person else []
+            )
+            monthly_nets = []
+            range_label = format_month_label(month)
+            start_month = month
+
         grand_total = sum(row[2] for row in totals)
         transaction_count = sum(row[3] for row in totals)
         excluded_total = sum(row[1] for row in excluded_totals)
@@ -1033,12 +1066,8 @@ def create_app(settings: Settings | None = None) -> Flask:
             for _bucket_id, bucket_name, total, count in totals
             if total > 0
         ]
-        income_totals = db.monthly_income_totals(month, person=person)
         income_total = sum(row[2] for row in income_totals)
         income_count = sum(row[3] for row in income_totals)
-        income_person_totals = (
-            db.monthly_income_person_totals(month) if not person else []
-        )
         holders = sorted(
             {
                 expense.card_holder
@@ -1055,6 +1084,8 @@ def create_app(settings: Settings | None = None) -> Flask:
             excluded_total=excluded_total,
             month=month,
             month_label=format_month_label(month),
+            range_label=range_label,
+            ytd_start_month=start_month,
             prev_month=shift_month(month, -1),
             next_month=shift_month(month, 1),
             person=person,
@@ -1067,8 +1098,10 @@ def create_app(settings: Settings | None = None) -> Flask:
             income_total=income_total,
             income_count=income_count,
             income_person_totals=income_person_totals,
+            monthly_nets=monthly_nets,
             net_total=net_total,
             net_label="Left over" if net_total >= 0 else "Shortfall",
+            view=view,
             page="report",
         )
 

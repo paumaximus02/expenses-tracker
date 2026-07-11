@@ -6,7 +6,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from expenses_tracker.config import NotifyEmailPolicy, Settings
-from expenses_tracker.dates import app_today, format_month_label, resolve_transaction_date, shift_month
+from expenses_tracker.dates import (
+    app_today,
+    format_month_label,
+    format_month_short_label,
+    format_ytd_range_label,
+    months_in_ytd,
+    resolve_transaction_date,
+    shift_month,
+    ytd_start_month,
+)
 
 
 def _settings(timezone_name: str = "America/New_York") -> Settings:
@@ -69,6 +78,21 @@ class MonthHelperTests(unittest.TestCase):
 
     def test_format_month_label(self) -> None:
         self.assertEqual(format_month_label("2026-07"), "July 2026")
+
+    def test_ytd_start_and_months(self) -> None:
+        self.assertEqual(ytd_start_month("2026-07"), "2026-01")
+        self.assertEqual(
+            months_in_ytd("2026-03"),
+            ["2026-01", "2026-02", "2026-03"],
+        )
+        self.assertEqual(months_in_ytd("2026-01"), ["2026-01"])
+
+    def test_format_ytd_range_label(self) -> None:
+        self.assertEqual(format_ytd_range_label("2026-07"), "Jan–Jul 2026")
+        self.assertEqual(format_ytd_range_label("2026-01"), "Jan 2026")
+
+    def test_format_month_short_label(self) -> None:
+        self.assertEqual(format_month_short_label("2026-07"), "Jul")
 
 
 if __name__ == "__main__":
