@@ -341,6 +341,18 @@ class WithdrawalSyncTests(unittest.TestCase):
             def authenticate(self) -> None:
                 pass
 
+            def list_message_ids(self, query: str, max_results: int | None = None) -> list[str]:
+                ids = [message["id"] for message in self.stubbed]
+                if max_results is not None:
+                    return ids[:max_results]
+                return ids
+
+            def get_message(self, message_id: str, *, format: str = "full") -> dict:
+                for message in self.stubbed:
+                    if message["id"] == message_id:
+                        return message
+                raise KeyError(message_id)
+
             def fetch_messages(self, query: str, max_results: int | None = None) -> list[dict]:
                 return self.stubbed
 

@@ -91,12 +91,30 @@ class StubGmail:
     def __init__(self, by_query: dict[str, list[dict]]) -> None:
         self.by_query = by_query
         self.fetched_queries: list[str] = []
+        self.listed_queries: list[str] = []
+        self.fetched_ids: list[str] = []
 
     def has_token(self) -> bool:
         return True
 
     def authenticate(self) -> None:
         pass
+
+    def list_message_ids(self, query: str, max_results: int | None = None) -> list[str]:
+        self.listed_queries.append(query)
+        messages = self.by_query.get(query, [])
+        ids = [message["id"] for message in messages]
+        if max_results is not None:
+            return ids[:max_results]
+        return ids
+
+    def get_message(self, message_id: str, *, format: str = "full") -> dict:
+        self.fetched_ids.append(message_id)
+        for messages in self.by_query.values():
+            for message in messages:
+                if message["id"] == message_id:
+                    return message
+        raise KeyError(message_id)
 
     def fetch_messages(self, query: str, max_results: int | None = None) -> list[dict]:
         self.fetched_queries.append(query)
@@ -228,12 +246,21 @@ class EmailQuerySyncTests(EmailQueryTestCase):
             body=LBS_WITHDRAWAL_BODY,
             sender="alerts@lbsfcu.org",
         )
-        service = self._service({"from:lbs": [message, message]})
+        gmail = StubGmail({"from:lbs": [message, message]})
+        service = ExpenseSyncService(
+            self.settings,
+            self.db,
+            gmail,
+            BucketMatcher(self.db),
+            tenant=self.tenant,
+        )
         first = service.sync(record_notification=False)
+        gmail.fetched_ids.clear()
         second = service.sync(record_notification=False)
         self.assertEqual(first["imported"], 1)
         self.assertEqual(second["imported"], 0)
         self.assertEqual(len(self.db.list_expenses()), 1)
+        self.assertEqual(gmail.fetched_ids, [])
 
     def test_non_matching_message_skipped(self) -> None:
         self.db.create_email_query(

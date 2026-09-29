@@ -199,6 +199,20 @@ class _StubGmail:
     def authenticate(self) -> None:
         pass
 
+    def list_message_ids(self, query: str, max_results: int | None = None) -> list[str]:
+        messages = self.by_query.get(query, [])
+        ids = [message["id"] for message in messages]
+        if max_results is not None:
+            return ids[:max_results]
+        return ids
+
+    def get_message(self, message_id: str, *, format: str = "full") -> dict:
+        for messages in self.by_query.values():
+            for message in messages:
+                if message["id"] == message_id:
+                    return message
+        raise KeyError(message_id)
+
     def fetch_messages(self, query: str, max_results: int | None = None) -> list[dict]:
         messages = self.by_query.get(query, [])
         if max_results is not None:

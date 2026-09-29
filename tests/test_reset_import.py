@@ -111,7 +111,7 @@ class EmailQuerySyncSkipTests(unittest.TestCase):
 
     def test_no_configured_queries_skips_gmail_fetch(self) -> None:
         class StubGmail:
-            fetch_calls: list[str] = []
+            list_calls: list[str] = []
 
             def has_token(self) -> bool:
                 return True
@@ -119,12 +119,18 @@ class EmailQuerySyncSkipTests(unittest.TestCase):
             def authenticate(self) -> None:
                 pass
 
-            def fetch_messages(self, query: str) -> list[dict]:
-                StubGmail.fetch_calls.append(query)
+            def list_message_ids(self, query: str, max_results: int | None = None) -> list[str]:
+                StubGmail.list_calls.append(query)
                 return []
 
+            def get_message(self, message_id: str, *, format: str = "full") -> dict:
+                raise AssertionError("get_message should not be called")
+
+            def fetch_messages(self, query: str) -> list[dict]:
+                raise AssertionError("fetch_messages should not be called")
+
         stub = StubGmail()
-        StubGmail.fetch_calls = []
+        StubGmail.list_calls = []
         sync = ExpenseSyncService(
             self.settings,
             self.db,
@@ -136,11 +142,11 @@ class EmailQuerySyncSkipTests(unittest.TestCase):
 
         self.assertEqual(result["messages_checked"], 0)
         self.assertEqual(result["imported"], 0)
-        self.assertEqual(StubGmail.fetch_calls, [])
+        self.assertEqual(StubGmail.list_calls, [])
 
     def test_query_without_match_text_skips_fetch(self) -> None:
         class StubGmail:
-            fetch_calls: list[str] = []
+            list_calls: list[str] = []
 
             def has_token(self) -> bool:
                 return True
@@ -148,9 +154,15 @@ class EmailQuerySyncSkipTests(unittest.TestCase):
             def authenticate(self) -> None:
                 pass
 
-            def fetch_messages(self, query: str) -> list[dict]:
-                StubGmail.fetch_calls.append(query)
+            def list_message_ids(self, query: str, max_results: int | None = None) -> list[str]:
+                StubGmail.list_calls.append(query)
                 return []
+
+            def get_message(self, message_id: str, *, format: str = "full") -> dict:
+                raise AssertionError("get_message should not be called")
+
+            def fetch_messages(self, query: str) -> list[dict]:
+                raise AssertionError("fetch_messages should not be called")
 
         self.db.create_email_query(
             name="Incomplete",
@@ -158,7 +170,7 @@ class EmailQuerySyncSkipTests(unittest.TestCase):
             match_text="",
         )
         stub = StubGmail()
-        StubGmail.fetch_calls = []
+        StubGmail.list_calls = []
         sync = ExpenseSyncService(
             self.settings,
             self.db,
@@ -169,7 +181,7 @@ class EmailQuerySyncSkipTests(unittest.TestCase):
         result = sync.sync(record_notification=False)
 
         self.assertEqual(result["messages_checked"], 0)
-        self.assertEqual(StubGmail.fetch_calls, [])
+        self.assertEqual(StubGmail.list_calls, [])
 
 
 if __name__ == "__main__":

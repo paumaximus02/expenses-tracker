@@ -22,13 +22,6 @@ from expenses_tracker.tenancy import global_db
 logger = logging.getLogger(__name__)
 
 
-def _message_subject(message: dict) -> str:
-    for header in message.get("payload", {}).get("headers", []):
-        if header.get("name", "").lower() == "subject":
-            return header.get("value", "")
-    return ""
-
-
 class ExpenseSyncService:
     def __init__(
         self,
@@ -158,6 +151,7 @@ class ExpenseSyncService:
                 email_query.query,
             )
             query_stats = {
+                "listed": 0,
                 "fetched": 0,
                 "already_claimed": 0,
                 "already_imported": 0,
@@ -168,30 +162,28 @@ class ExpenseSyncService:
                 "imported_withdrawal": 0,
             }
 
-            messages = self.gmail.fetch_messages(email_query.query)
-            query_stats["fetched"] = len(messages)
+            message_ids = self.gmail.list_message_ids(email_query.query)
+            query_stats["listed"] = len(message_ids)
             logger.info(
-                "Fetched %s Gmail messages for query '%s'",
-                len(messages),
+                "Listed %s Gmail message IDs for query '%s'",
+                len(message_ids),
                 email_query.name,
             )
-            if not messages:
+            if not message_ids:
                 self._email_query_debug(
                     "Query id=%s name=%r: Gmail search returned no messages",
                     email_query.id,
                     email_query.name,
                 )
 
-            for message in messages:
-                message_id = message["id"]
+            for message_id in message_ids:
                 if message_id in seen_ids:
                     query_stats["already_claimed"] += 1
                     self._email_query_debug(
                         "Message %s skipped for query %r: already claimed by an earlier "
-                        "query in this sync (subject=%r)",
+                        "query in this sync",
                         message_id,
                         email_query.name,
-                        _message_subject(message),
                     )
                     continue
                 seen_ids.add(message_id)
@@ -199,13 +191,14 @@ class ExpenseSyncService:
                     skipped += 1
                     query_stats["already_imported"] += 1
                     self._email_query_debug(
-                        "Message %s skipped for query %r: already imported (subject=%r)",
+                        "Message %s skipped for query %r: already imported",
                         message_id,
                         email_query.name,
-                        _message_subject(message),
                     )
                     continue
 
+                message = self.gmail.get_message(message_id)
+                query_stats["fetched"] += 1
                 messages_checked += 1
                 context = build_context(message)
                 if not query_matches(context, email_query):
@@ -284,11 +277,12 @@ class ExpenseSyncService:
                 )
 
             self._email_query_debug(
-                "Query id=%s name=%r finished: fetched=%s already_claimed=%s "
+                "Query id=%s name=%r finished: listed=%s fetched=%s already_claimed=%s "
                 "already_imported=%s no_match=%s unparsed=%s imported_income=%s "
                 "imported_expense=%s imported_withdrawal=%s",
                 email_query.id,
                 email_query.name,
+                query_stats["listed"],
                 query_stats["fetched"],
                 query_stats["already_claimed"],
                 query_stats["already_imported"],
@@ -331,8 +325,10 @@ class ExpenseSyncService:
         for email_query in self.db.list_email_queries(enabled_only=True):
             if email_query.kind != "expense":
                 continue
-            for message in self.gmail.fetch_messages(email_query.query):
-                messages_by_id[message["id"]] = message
+            for message_id in self.gmail.list_message_ids(email_query.query):
+                if message_id in messages_by_id:
+                    continue
+                messages_by_id[message_id] = self.gmail.get_message(message_id)
         return messages_by_id
 
     def repair_card_holders(self) -> dict[str, int]:
