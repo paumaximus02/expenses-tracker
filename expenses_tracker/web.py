@@ -1343,7 +1343,6 @@ def create_app(settings: Settings | None = None) -> Flask:
             insights_api_base=tenant.insights_api_base,
             insights_model=tenant.insights_model,
             insights_api_key_mask=mask_api_key(tenant.insights_api_key),
-            insights_api_key=tenant.insights_api_key or "",
             page="settings",
         )
 
@@ -1374,10 +1373,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         except ValueError as exc:
             flash(str(exc), "error")
             return redirect(url_for("settings_page"))
-        if api_key:
-            flash(f"AI insights settings saved. Key ending in {api_key[-4:]} ({len(api_key)} characters).", "success")
-        else:
-            flash("AI insights settings saved.", "success")
+        flash("AI insights settings saved.", "success")
         return redirect(url_for("settings_page"))
 
     @app.route("/settings/notifications", methods=["POST"])

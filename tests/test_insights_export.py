@@ -222,6 +222,47 @@ class ExportAndInsightDataTests(unittest.TestCase):
         self.assertEqual(payload["lines"][0]["amount"], 1000.0)
         self.assertEqual(payload["expense_total"], 40.0)
 
+    def test_look_into_groups_large_repeat_same_day_and_unassigned_charges(self) -> None:
+        self._expense("e-cafe-1", date(2026, 3, 2), 6.0, merchant="Cafe")
+        self._expense("e-cafe-2", date(2026, 3, 2), 6.0, merchant="Cafe")
+        self._expense("e-cafe-3", date(2026, 3, 18), 8.0, merchant=" cafe ")
+        self.db.insert_expense(
+            gmail_message_id="e-mystery",
+            transaction_date=date(2026, 3, 9),
+            merchant="Unknown Shop",
+            merchant_normalized="unknown shop",
+            amount=80.0,
+            currency="USD",
+            bucket_id=None,
+            suggested_bucket_id=None,
+            status=ExpenseStatus.CONFIRMED,
+            email_subject=EMAIL_SECRET,
+            email_from="bank@example.com",
+            card_holder="Juan",
+        )
+        payload = build_insight_payload(
+            self.db,
+            month="2026-03",
+            view="month",
+            person="Juan",
+        )
+        look_into = payload["look_into"]
+        self.assertEqual(look_into["largest_expenses"][0]["name"], "Unknown Shop")
+        self.assertEqual(look_into["largest_expenses"][0]["amount"], 80.0)
+        cafe = next(item for item in look_into["repeat_merchants"] if item["name"].strip().casefold() == "cafe")
+        self.assertEqual(cafe["count"], 3)
+        self.assertEqual(cafe["total"], 20.0)
+        self.assertEqual(look_into["same_day_repeats"], [
+            {
+                "date": "2026-03-02",
+                "name": "Cafe",
+                "amounts": [6.0, 6.0],
+                "person": "Juan",
+                "bucket": "Groceries",
+            }
+        ])
+        self.assertEqual([item["name"] for item in look_into["unassigned"]], ["Unknown Shop"])
+
 
 class InsightsClientTests(unittest.TestCase):
     def test_clean_api_key_removes_wrapping_and_whitespace(self) -> None:
@@ -276,8 +317,10 @@ class InsightsClientTests(unittest.TestCase):
         self.assertEqual(captured["timeout"], 30)
         self.assertNotIn(API_KEY, str(captured["body"]))
         self.assertNotIn("temperature", str(captured["body"]))
+        self.assertIn("Name the specific charges and income entries to look into.", str(captured["body"]))
+        self.assertIn("Do not give general budgeting advice.", str(captured["body"]))
 
-    def test_http_error_shows_the_key_and_provider_response(self) -> None:
+    def test_http_error_hides_the_key(self) -> None:
         def _urlopen(request, timeout=None):
             raise urllib.error.HTTPError(
                 request.full_url,
@@ -292,9 +335,8 @@ class InsightsClientTests(unittest.TestCase):
                 request_insights(_tenant(), {"period": "March 2026"})
         message = str(caught.exception)
         self.assertIn("HTTP 401", message)
-        self.assertIn(f"rejected {API_KEY}", message)
-        self.assertIn(f"Sent key: {API_KEY}", message)
-        self.assertIn(f"Stored key: {API_KEY}", message)
+        self.assertIn("rejected ••••", message)
+        self.assertNotIn(API_KEY, message)
 
     def test_http_error_includes_a_safe_provider_message(self) -> None:
         def _urlopen(request, timeout=None):
@@ -362,9 +404,10 @@ class InsightsAndExportRouteTests(unittest.TestCase):
         self.assertIn(b"Download CSV", page.data)
         self.assertIn(b"All history", page.data)
         self.assertIn(b"Add an API key in Settings", page.data)
+        self.assertIn(b"worth a closer look", page.data)
         self.assertNotIn(b'id="report-insights-button"', page.data)
 
-    def test_settings_save_stores_the_key_and_shows_it(self) -> None:
+    def test_settings_save_stores_the_key_without_showing_it(self) -> None:
         with patch.object(GmailClient, "verify_connection", return_value=("disconnected", None)):
             response = self.client.post(
                 "/settings/insights?preview=1",
@@ -376,8 +419,9 @@ class InsightsAndExportRouteTests(unittest.TestCase):
                 follow_redirects=True,
             )
         self.assertEqual(response.status_code, 200)
-        self.assertIn(API_KEY.encode(), response.data)
-        self.assertIn(b"Saved key:", response.data)
+        self.assertNotIn(API_KEY.encode(), response.data)
+        self.assertIn(b"Saved key: \xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa29876", response.data)
+        self.assertNotIn(b"characters).", response.data)
         tenant = Database(self.db_path).get_tenant(self.tenant_id)
         assert tenant is not None
         self.assertEqual(tenant.insights_api_key, API_KEY)

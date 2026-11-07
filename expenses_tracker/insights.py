@@ -14,13 +14,20 @@ INSIGHTS_LINE_CAP = 500
 INSIGHTS_TIMEOUT_SECONDS = 30
 
 INSIGHTS_SYSTEM_PROMPT = (
-    "You write a short household money briefing from the JSON the user sends. "
-    "Cover whether the period left money over or fell short, where spending went, "
-    "standout merchants or income sources, and anything that looks unusual. "
-    "Write plain sentences. Do not invent transactions. "
-    "excluded_expense_total is reimbursements or other amounts left out of spending, "
-    "not extra spending. If omitted_line_count is greater than zero, the lines list "
-    "is only the largest amounts and the rest were left out."
+    "You review one household's income and expenses and name the specific charges "
+    "and income entries they should look into. Use only the JSON. "
+    "Do not invent transactions, merchants, dates, or amounts. "
+    "Start with one sentence on whether the period left money over or fell short, using the totals. "
+    "Then list only the items worth checking, most important first. "
+    "Each item must name the merchant or income source, the date, and the amount, and say why it deserves a look. "
+    "Use look_into for that: a charge that is large beside the other expenses, the same merchant more than once, "
+    "two charges for the same merchant on the same day, or a line still marked Unassigned. "
+    "Do not list every transaction. Skip a charge when it is small and similar to the other charges in its bucket. "
+    "Do not give general budgeting advice. "
+    "If nothing in the data is worth a closer look, say that in one sentence. "
+    "excluded_expense_total is money left out of spending, not extra spending. "
+    "look_into is computed from the full period. If omitted_line_count is greater than zero, "
+    "the lines list keeps only the largest amounts."
 )
 
 
@@ -67,6 +74,106 @@ def normalize_api_base(raw: str) -> str:
 
 def _money(value: float) -> float:
     return round(float(value), 2)
+
+
+def _line_ref(line: dict) -> dict:
+    return {
+        "date": line["date"],
+        "name": line["name"],
+        "amount": line["amount"],
+        "bucket": line["bucket"],
+        "person": line["person"],
+    }
+
+
+def _merchant_key(name: str) -> str:
+    return " ".join(name.casefold().split())
+
+
+def _display_name(group: list[dict]) -> str:
+    cleaned = [line["name"].strip() for line in group if line["name"].strip()]
+    if not cleaned:
+        return ""
+    counts: dict[str, int] = {}
+    for name in cleaned:
+        counts[name] = counts.get(name, 0) + 1
+    return sorted(counts, key=lambda name: (-counts[name], name.casefold(), name))[0]
+
+
+def _expense_share(amount: float, expense_total: float) -> float:
+    if expense_total <= 0:
+        return 0.0
+    return round(100 * amount / expense_total, 1)
+
+
+def build_look_into(lines: list[dict], expense_total: float) -> dict:
+    """Group the charges that are worth a closer look.
+
+    The model is asked to cite these groups instead of summarizing the totals.
+    """
+    expenses = [line for line in lines if line["type"] == "expense"]
+    largest = sorted(expenses, key=lambda line: (-float(line["amount"]), line["date"], line["name"]))[:8]
+
+    grouped: dict[str, list[dict]] = {}
+    for line in expenses:
+        grouped.setdefault(_merchant_key(line["name"]), []).append(line)
+    repeats: list[dict] = []
+    for group in grouped.values():
+        if len(group) < 2:
+            continue
+        ordered = sorted(group, key=lambda line: (line["date"], -float(line["amount"]), line["name"]))
+        total = _money(sum(float(line["amount"]) for line in ordered))
+        repeats.append(
+            {
+                "name": _display_name(ordered),
+                "count": len(ordered),
+                "total": total,
+                "share_of_expenses": _expense_share(total, expense_total),
+                "charges": [_line_ref(line) for line in ordered[:6]],
+            }
+        )
+    repeats.sort(key=lambda item: (-item["total"], -item["count"], item["name"]))
+
+    by_day: dict[tuple[str, str], list[dict]] = {}
+    for line in expenses:
+        by_day.setdefault((_merchant_key(line["name"]), line["date"]), []).append(line)
+    same_day: list[dict] = []
+    for group in by_day.values():
+        if len(group) < 2:
+            continue
+        ordered = sorted(group, key=lambda line: (-float(line["amount"]), line["name"]))
+        same_day.append(
+            {
+                "date": ordered[0]["date"],
+                "name": _display_name(ordered),
+                "amounts": [_money(line["amount"]) for line in ordered],
+                "person": ordered[0]["person"],
+                "bucket": ordered[0]["bucket"],
+            }
+        )
+    same_day.sort(key=lambda item: (item["date"], item["name"]))
+
+    unassigned = [
+        {
+            "type": line["type"],
+            "date": line["date"],
+            "name": line["name"],
+            "amount": line["amount"],
+            "person": line["person"],
+        }
+        for line in lines
+        if (line.get("bucket") or "Unassigned") == "Unassigned"
+    ]
+
+    return {
+        "largest_expenses": [
+            {**_line_ref(line), "share_of_expenses": _expense_share(float(line["amount"]), expense_total)}
+            for line in largest
+        ],
+        "repeat_merchants": repeats[:8],
+        "same_day_repeats": same_day[:8],
+        "unassigned": unassigned[:12],
+    }
 
 
 def limit_insight_lines(lines: list[dict], cap: int = INSIGHTS_LINE_CAP) -> tuple[list[dict], int]:
@@ -157,12 +264,39 @@ def build_insight_payload(
         ],
         "lines": kept_lines,
         "omitted_line_count": omitted,
+        "look_into": build_look_into(lines, expense_total),
     }
 
 
-def _key_debug(label: str, key: str | None) -> str:
-    shown = key or ""
-    return f"{label}: {shown}\n{label} with hidden characters visible: {shown!r} ({len(shown)} characters)"
+def _redact_secrets(text: str, *secrets: str | None) -> str:
+    redacted = text
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "••••")
+    return redacted
+
+
+def _provider_error_detail(body: str, *secrets: str | None) -> str:
+    text = (body or "").strip()
+    if not text:
+        return ""
+    detail = text
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, str) and error.strip():
+            detail = error.strip()
+        elif isinstance(error, dict):
+            message = error.get("message") or error.get("error")
+            if isinstance(message, str) and message.strip():
+                detail = message.strip()
+    detail = _redact_secrets(detail, *secrets)
+    if len(detail) > 400:
+        detail = detail[:400].rstrip() + "…"
+    return detail
 
 
 def request_insights(tenant: Tenant, payload: dict) -> str:
@@ -181,7 +315,10 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
             {"role": "system", "content": INSIGHTS_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": "Brief this period.\n" + json.dumps(payload, ensure_ascii=True),
+                "content": (
+                    "Name the specific charges and income entries to look into.\n"
+                    + json.dumps(payload, ensure_ascii=True)
+                ),
             },
         ],
     }
@@ -203,15 +340,10 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
             provider_body = exc.read().decode("utf-8", errors="replace").strip()
         except Exception:
             provider_body = ""
-        message = "\n".join(
-            [
-                f"The insights service returned HTTP {exc.code}.",
-                f"Provider response: {provider_body or '(empty)'}",
-                _key_debug("Stored key", tenant.insights_api_key),
-                _key_debug("Sent key", api_key),
-                f"Request URL: {url}",
-            ]
-        )
+        detail = _provider_error_detail(provider_body, api_key, tenant.insights_api_key)
+        message = f"The insights service returned HTTP {exc.code}."
+        if detail:
+            message = f"{message} {detail}"
         raise InsightsError(message) from exc
     except TimeoutError as exc:
         raise InsightsError("The insights service timed out.") from exc
