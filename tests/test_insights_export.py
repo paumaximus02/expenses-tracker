@@ -254,6 +254,7 @@ class InsightsClientTests(unittest.TestCase):
         self.assertEqual(captured["url"], "https://api.openai.com/v1/chat/completions")
         self.assertEqual(captured["timeout"], 30)
         self.assertNotIn(API_KEY, str(captured["body"]))
+        self.assertNotIn("temperature", str(captured["body"]))
 
     def test_http_error_does_not_echo_the_key(self) -> None:
         def _urlopen(request, timeout=None):
@@ -271,6 +272,22 @@ class InsightsClientTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("HTTP 401", message)
         self.assertNotIn(API_KEY, message)
+
+    def test_http_error_includes_a_safe_provider_message(self) -> None:
+        def _urlopen(request, timeout=None):
+            body = json.dumps({"error": {"message": "temperature is not supported"}}).encode()
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "Bad Request",
+                Message(),
+                io.BytesIO(body),
+            )
+
+        with patch("expenses_tracker.insights.urllib.request.urlopen", side_effect=_urlopen):
+            with self.assertRaises(InsightsError) as caught:
+                request_insights(_tenant(), {"period": "March 2026"})
+        self.assertIn("temperature is not supported", str(caught.exception))
 
 
 class InsightsAndExportRouteTests(unittest.TestCase):

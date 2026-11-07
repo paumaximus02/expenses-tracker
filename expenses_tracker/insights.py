@@ -141,6 +141,28 @@ def build_insight_payload(
     }
 
 
+def _provider_error_detail(raw: bytes, api_key: str) -> str:
+    """Short provider message safe to show in the app."""
+    text = raw.decode("utf-8", errors="replace").strip()
+    message = ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        message = text
+    else:
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            message = str(error.get("message") or "")
+        elif isinstance(error, str):
+            message = error
+    message = " ".join(message.split())
+    if api_key:
+        message = message.replace(api_key, "")
+    if len(message) > 180:
+        message = message[:177].rstrip() + "..."
+    return message.strip()
+
+
 def request_insights(tenant: Tenant, payload: dict) -> str:
     api_key = (tenant.insights_api_key or "").strip()
     if not api_key:
@@ -149,9 +171,9 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
     base = normalize_api_base(tenant.insights_api_base or DEFAULT_INSIGHTS_API_BASE)
     model = (tenant.insights_model or DEFAULT_INSIGHTS_MODEL).strip() or DEFAULT_INSIGHTS_MODEL
     url = f"{base}/chat/completions"
+    # Reasoning models such as Grok reject temperature with HTTP 400.
     body = {
         "model": model,
-        "temperature": 0.3,
         "messages": [
             {"role": "system", "content": INSIGHTS_SYSTEM_PROMPT},
             {
@@ -174,11 +196,15 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
         with urllib.request.urlopen(request, timeout=INSIGHTS_TIMEOUT_SECONDS) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
+        detail = ""
         try:
-            exc.read()
+            detail = _provider_error_detail(exc.read(), api_key)
         except Exception:
-            pass
-        raise InsightsError(f"The insights service returned HTTP {exc.code}.") from exc
+            detail = ""
+        message = f"The insights service returned HTTP {exc.code}."
+        if detail:
+            message = f"{message} {detail}"
+        raise InsightsError(message) from exc
     except TimeoutError as exc:
         raise InsightsError("The insights service timed out.") from exc
     except urllib.error.URLError as exc:
