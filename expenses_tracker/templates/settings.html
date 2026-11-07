@@ -95,10 +95,12 @@
         </label>
         <label class="field">
           <span>API key</span>
-          <input type="password"
+          <input type="text"
                  name="insights_api_key"
                  value=""
-                 autocomplete="new-password"
+                 autocomplete="off"
+                 autocapitalize="off"
+                 spellcheck="false"
                  placeholder="{% if insights_api_key_mask %}Leave blank to keep the saved key{% else %}Paste an API key{% endif %}">
         </label>
         {% if insights_api_key_mask %}
@@ -109,7 +111,8 @@
           </label>
         {% endif %}
         <p class="settings-help">
-          OpenAI-compatible base URL, such as <code>https://api.openai.com/v1</code>.
+          For Grok, use <code>https://api.x.ai/v1</code> and a key from console.x.ai that starts with <code>xai-</code>.
+          Leaving the key blank keeps the saved one.
         </p>
         <button type="submit" class="btn btn-primary">Save AI settings</button>
       </form>

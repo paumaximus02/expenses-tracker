@@ -36,9 +36,11 @@ from expenses_tracker.gmail_client import GmailClient
 from expenses_tracker.insights import (
     InsightsError,
     build_insight_payload,
+    clean_api_key,
     mask_api_key,
     normalize_api_base,
     request_insights,
+    validate_api_key_for_base,
 )
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
 from expenses_tracker.notifications import format_notification_time, notification_to_dict
@@ -1353,23 +1355,28 @@ def create_app(settings: Settings | None = None) -> Flask:
         auth_db = build_global_db(settings)
         api_base_raw = request.form.get("insights_api_base", "")
         model = request.form.get("insights_model", "")
-        api_key = request.form.get("insights_api_key", "")
+        api_key = clean_api_key(request.form.get("insights_api_key", ""))
         clear_api_key = request.form.get("clear_insights_api_key") == "on"
-        if api_key.strip():
+        if api_key:
             clear_api_key = False
         try:
             api_base = normalize_api_base(api_base_raw)
+            if api_key:
+                validate_api_key_for_base(api_base, api_key)
             auth_db.update_tenant_insights(
                 tenant.id,
                 api_base=api_base,
                 model=model,
-                api_key=api_key if api_key.strip() else None,
+                api_key=api_key or None,
                 clear_api_key=clear_api_key,
             )
         except ValueError as exc:
             flash(str(exc), "error")
             return redirect(url_for("settings_page"))
-        flash("AI insights settings saved.", "success")
+        if api_key:
+            flash(f"AI insights settings saved. Key ending in {api_key[-4:]} ({len(api_key)} characters).", "success")
+        else:
+            flash("AI insights settings saved.", "success")
         return redirect(url_for("settings_page"))
 
     @app.route("/settings/notifications", methods=["POST"])

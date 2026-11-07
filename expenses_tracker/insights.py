@@ -28,6 +28,25 @@ class InsightsError(Exception):
     """The insights request could not be completed."""
 
 
+def clean_api_key(raw: str | None) -> str:
+    """Normalize a pasted key without changing the secret itself."""
+    key = (raw or "").strip()
+    if key.lower().startswith("bearer "):
+        key = key[7:].strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in {'"', "'"}:
+        key = key[1:-1].strip()
+    return "".join(key.split())
+
+
+def validate_api_key_for_base(api_base: str, api_key: str) -> None:
+    host = urllib.parse.urlparse(api_base).netloc.lower()
+    if host.endswith(".x.ai") and not api_key.startswith("xai-"):
+        raise ValueError(
+            "That value does not look like an xAI API key. "
+            "In console.x.ai, copy the key that starts with xai-."
+        )
+
+
 def mask_api_key(api_key: str | None) -> str | None:
     if not api_key:
         return None
@@ -164,9 +183,10 @@ def _provider_error_detail(raw: bytes, api_key: str) -> str:
 
 
 def request_insights(tenant: Tenant, payload: dict) -> str:
-    api_key = (tenant.insights_api_key or "").strip()
+    api_key = clean_api_key(tenant.insights_api_key)
     if not api_key:
         raise InsightsError("Add an API key in Settings before requesting insights.")
+    validate_api_key_for_base(tenant.insights_api_base or DEFAULT_INSIGHTS_API_BASE, api_key)
 
     base = normalize_api_base(tenant.insights_api_base or DEFAULT_INSIGHTS_API_BASE)
     model = (tenant.insights_model or DEFAULT_INSIGHTS_MODEL).strip() or DEFAULT_INSIGHTS_MODEL

@@ -14,7 +14,12 @@ from expenses_tracker.config import NotifyEmailPolicy, Settings
 from expenses_tracker.db import Database
 from expenses_tracker.export_csv import build_export_rows, render_csv
 from expenses_tracker.gmail_client import GmailClient
-from expenses_tracker.insights import InsightsError, build_insight_payload, request_insights
+from expenses_tracker.insights import (
+    InsightsError,
+    build_insight_payload,
+    clean_api_key,
+    request_insights,
+)
 from expenses_tracker.models import ExpenseStatus, Tenant
 from expenses_tracker.web import create_app
 
@@ -219,6 +224,22 @@ class ExportAndInsightDataTests(unittest.TestCase):
 
 
 class InsightsClientTests(unittest.TestCase):
+    def test_clean_api_key_removes_wrapping_and_whitespace(self) -> None:
+        self.assertEqual(clean_api_key('  Bearer "xai-abc def" \n'), "xai-abcdef")
+
+    def test_xai_base_rejects_a_key_that_does_not_start_with_xai(self) -> None:
+        with patch("expenses_tracker.insights.urllib.request.urlopen") as urlopen:
+            with self.assertRaises(ValueError) as caught:
+                request_insights(
+                    _tenant(
+                        insights_api_base="https://api.x.ai/v1",
+                        insights_api_key="sk-test-secret-key-9876",
+                    ),
+                    {"period": "March 2026"},
+                )
+        urlopen.assert_not_called()
+        self.assertIn("xai-", str(caught.exception))
+
     def test_missing_key_does_not_call_the_service(self) -> None:
         with patch("expenses_tracker.insights.urllib.request.urlopen") as urlopen:
             with self.assertRaises(InsightsError) as caught:
@@ -385,6 +406,22 @@ class InsightsAndExportRouteTests(unittest.TestCase):
                 follow_redirects=True,
             )
         self.assertIn(b"API base URL", response.data)
+        tenant = Database(self.db_path).get_tenant(self.tenant_id)
+        assert tenant is not None
+        self.assertIsNone(tenant.insights_api_key)
+
+    def test_xai_settings_reject_a_non_xai_key(self) -> None:
+        with patch.object(GmailClient, "verify_connection", return_value=("disconnected", None)):
+            response = self.client.post(
+                "/settings/insights?preview=1",
+                data={
+                    "insights_api_base": "https://api.x.ai/v1",
+                    "insights_model": "grok-4.7",
+                    "insights_api_key": "sk-test-secret-key-9876",
+                },
+                follow_redirects=True,
+            )
+        self.assertIn(b"starts with xai-", response.data)
         tenant = Database(self.db_path).get_tenant(self.tenant_id)
         assert tenant is not None
         self.assertIsNone(tenant.insights_api_key)
