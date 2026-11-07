@@ -80,6 +80,17 @@ def _valid_month_from(raw: str | None, end_month: str | None) -> str | None:
     return value
 
 
+def _friendly_gmail_status_detail(detail: str | None) -> str | None:
+    if not detail:
+        return None
+    lower = detail.lower()
+    if "invalid_grant" in lower:
+        return "Google rejected the saved login (expired or revoked)."
+    if "gmail is not connected" in lower:
+        return None
+    return detail
+
+
 def _expense_filter_redirect_kwargs(form) -> dict[str, str | int]:
     month = form.get("month", app_month())
     kwargs: dict[str, str | int] = {
@@ -1231,11 +1242,21 @@ def create_app(settings: Settings | None = None) -> Flask:
         card_holders_text = ",".join(
             f"{last_four}:{name}" for last_four, name in sorted(tenant.card_holders.items())
         )
+        gmail_status, gmail_status_detail = sync.gmail.verify_connection()
+        if gmail_status == "connected":
+            try:
+                refreshed = sync.gmail.export_token_json()
+                if refreshed and refreshed != (tenant.gmail_token_json or ""):
+                    auth_db.update_tenant_gmail_token(tenant.id, refreshed)
+            except RuntimeError:
+                pass
         return render_template(
             "settings.html",
             tenant=tenant,
             card_holders_text=card_holders_text,
-            gmail_connected=bool(tenant.gmail_token_json),
+            gmail_status=gmail_status,
+            gmail_status_detail=_friendly_gmail_status_detail(gmail_status_detail),
+            gmail_connected=gmail_status == "connected",
             notify_email=user.notify_email if user is not None else False,
             page="settings",
         )

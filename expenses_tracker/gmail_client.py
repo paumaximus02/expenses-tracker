@@ -123,6 +123,28 @@ class GmailClient:
             raise RuntimeError("Gmail is not authenticated.")
         return self._credentials.to_json()
 
+    def verify_connection(self) -> tuple[str, str | None]:
+        """Check whether Gmail credentials are usable.
+
+        Returns:
+            (state, detail) where state is one of:
+            - ``connected``: token present and Gmail accepts it
+            - ``disconnected``: no token configured
+            - ``needs_reconnect``: token present but invalid/expired/revoked
+        """
+        if not self.has_token():
+            return "disconnected", None
+        try:
+            self.authenticate()
+            execute_with_backoff(
+                self.service.users().getProfile(userId="me"),
+                max_attempts=3,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface any auth/API failure to UI
+            logger.info("Gmail connection check failed: %s", exc)
+            return "needs_reconnect", str(exc)
+        return "connected", None
+
     def authenticate(self) -> None:
         creds = None
         if self.token_json:

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 from googleapiclient.errors import HttpError
 
-from expenses_tracker.gmail_client import execute_with_backoff
+from expenses_tracker.gmail_client import GmailClient, execute_with_backoff
 
 
 def _http_error(status: int, reason: str, message: str = "Quota exceeded") -> HttpError:
@@ -53,6 +54,37 @@ class ExecuteWithBackoffTests(unittest.TestCase):
             execute_with_backoff(request, max_attempts=4, sleep=lambda _s: None)
 
         self.assertEqual(request.execute.call_count, 1)
+
+
+class VerifyConnectionTests(unittest.TestCase):
+    def test_disconnected_without_token(self) -> None:
+        client = GmailClient(Path("credentials.json"), token_json=None)
+        client.token_path = Path("missing-token.json")
+        state, detail = client.verify_connection()
+        self.assertEqual(state, "disconnected")
+        self.assertIsNone(detail)
+
+    def test_needs_reconnect_when_authenticate_fails(self) -> None:
+        client = GmailClient(
+            Path("credentials.json"),
+            token_json='{"token":"x","refresh_token":"y","token_uri":"https://oauth2.googleapis.com/token","client_id":"id","client_secret":"secret"}',
+        )
+        client.authenticate = Mock(side_effect=RuntimeError("token revoked"))  # type: ignore[method-assign]
+        state, detail = client.verify_connection()
+        self.assertEqual(state, "needs_reconnect")
+        self.assertIn("token revoked", detail or "")
+
+    def test_connected_when_profile_succeeds(self) -> None:
+        client = GmailClient(Path("credentials.json"), token_json='{"token":"x"}')
+        client.authenticate = Mock()  # type: ignore[method-assign]
+        profile_request = Mock()
+        profile_request.execute.return_value = {"emailAddress": "user@example.com"}
+        service = Mock()
+        service.users.return_value.getProfile.return_value = profile_request
+        client._service = service
+        state, detail = client.verify_connection()
+        self.assertEqual(state, "connected")
+        self.assertIsNone(detail)
 
 
 if __name__ == "__main__":

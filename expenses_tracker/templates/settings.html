@@ -56,8 +56,15 @@
 
     <section class="panel">
       <h2>Gmail connection</h2>
-      {% if gmail_connected %}
+      {% if gmail_status == 'connected' %}
         <p class="settings-status settings-status-ok">Gmail is connected for this household.</p>
+      {% elif gmail_status == 'needs_reconnect' %}
+        <p class="settings-status settings-status-warn">
+          Gmail connection was lost or the saved token is no longer valid. Reconnect to resume sync.
+        </p>
+        {% if gmail_status_detail %}
+          <p class="settings-help">{{ gmail_status_detail }}</p>
+        {% endif %}
       {% else %}
         <p class="settings-status settings-status-warn">Gmail is not connected yet.</p>
       {% endif %}
@@ -65,7 +72,7 @@
         Add <code>{{ url_for('gmail_oauth_callback', _external=True) }}</code> as an authorized redirect URI in Google Cloud Console.
       </p>
       <a href="{{ url_for('gmail_connect') }}" class="btn btn-secondary">
-        {% if gmail_connected %}Reconnect Gmail{% else %}Connect Gmail{% endif %}
+        {% if gmail_status == 'disconnected' %}Connect Gmail{% else %}Reconnect Gmail{% endif %}
       </a>
     </section>
   </div>
