@@ -381,6 +381,23 @@ body {
   align-items: end;
 }
 
+.report-export-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.report-insights-status {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}
+
+.report-insights-body {
+  white-space: pre-wrap;
+  margin: 0.75rem 0 0;
+  line-height: 1.5;
+}
+
 .report-view-toggle {
   display: inline-flex;
   align-items: stretch;

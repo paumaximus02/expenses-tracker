@@ -38,6 +38,9 @@ class Tenant:
     gmail_token_json: str | None
     created_at: datetime
     income_gmail_search_query: str = ""
+    insights_api_base: str = "https://api.openai.com/v1"
+    insights_model: str = "gpt-4o-mini"
+    insights_api_key: str | None = None
 
 
 @dataclass

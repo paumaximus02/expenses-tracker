@@ -112,6 +112,7 @@ class Database:
         if "sync_notification_id" not in columns:
             conn.execute("ALTER TABLE expenses ADD COLUMN sync_notification_id INTEGER")
         self._migrate_tenancy(conn)
+        self._migrate_insights_settings(conn)
         self._migrate_buckets_hierarchy(conn)
         self._migrate_income(conn)
         self._migrate_email_pipeline_v2(conn)
@@ -181,6 +182,21 @@ class Database:
                 """,
                 (1, "merchant_rules_deduped", "true"),
             )
+
+    def _migrate_insights_settings(self, conn: sqlite3.Connection) -> None:
+        tenant_columns = {row[1] for row in conn.execute("PRAGMA table_info(tenants)")}
+        if "insights_api_base" not in tenant_columns:
+            conn.execute(
+                "ALTER TABLE tenants ADD COLUMN insights_api_base TEXT NOT NULL "
+                "DEFAULT 'https://api.openai.com/v1'"
+            )
+        if "insights_model" not in tenant_columns:
+            conn.execute(
+                "ALTER TABLE tenants ADD COLUMN insights_model TEXT NOT NULL "
+                "DEFAULT 'gpt-4o-mini'"
+            )
+        if "insights_api_key" not in tenant_columns:
+            conn.execute("ALTER TABLE tenants ADD COLUMN insights_api_key TEXT")
 
     def _migrate_income(self, conn: sqlite3.Connection) -> None:
         tenant_columns = {row[1] for row in conn.execute("PRAGMA table_info(tenants)")}
@@ -2802,6 +2818,12 @@ class Database:
             if "income_gmail_search_query" in row.keys()
             else ""
         )
+        keys = row.keys()
+        api_base = row["insights_api_base"] if "insights_api_base" in keys else ""
+        model = row["insights_model"] if "insights_model" in keys else ""
+        api_key = row["insights_api_key"] if "insights_api_key" in keys else None
+        if isinstance(api_key, str):
+            api_key = api_key.strip() or None
         return Tenant(
             id=row["id"],
             name=row["name"],
@@ -2811,6 +2833,9 @@ class Database:
             gmail_token_json=row["gmail_token_json"],
             created_at=self._parse_db_datetime(row["created_at"]),
             income_gmail_search_query=income_query or "",
+            insights_api_base=(api_base or "").strip() or "https://api.openai.com/v1",
+            insights_model=(model or "").strip() or "gpt-4o-mini",
+            insights_api_key=api_key,
         )
 
     def get_tenant(self, tenant_id: int) -> Tenant | None:
@@ -2818,7 +2843,8 @@ class Database:
             row = conn.execute(
                 """
                 SELECT id, name, invite_code, card_holders, gmail_search_query,
-                       gmail_token_json, created_at, income_gmail_search_query
+                       gmail_token_json, created_at, income_gmail_search_query,
+                       insights_api_base, insights_model, insights_api_key
                 FROM tenants
                 WHERE id = ?
                 """,
@@ -2836,7 +2862,8 @@ class Database:
             row = conn.execute(
                 """
                 SELECT id, name, invite_code, card_holders, gmail_search_query,
-                       gmail_token_json, created_at, income_gmail_search_query
+                       gmail_token_json, created_at, income_gmail_search_query,
+                       insights_api_base, insights_model, insights_api_key
                 FROM tenants
                 WHERE invite_code = ?
                 """,
@@ -2851,7 +2878,8 @@ class Database:
             rows = conn.execute(
                 """
                 SELECT id, name, invite_code, card_holders, gmail_search_query,
-                       gmail_token_json, created_at, income_gmail_search_query
+                       gmail_token_json, created_at, income_gmail_search_query,
+                       insights_api_base, insights_model, insights_api_key
                 FROM tenants
                 WHERE gmail_token_json IS NOT NULL AND TRIM(gmail_token_json) != ''
                 ORDER BY id
@@ -2931,6 +2959,42 @@ class Database:
         updated = self.get_tenant(tenant_id)
         if updated is None:
             raise RuntimeError("Failed to update tenant.")
+        return updated
+
+    def update_tenant_insights(
+        self,
+        tenant_id: int,
+        *,
+        api_base: str,
+        model: str,
+        api_key: str | None = None,
+        clear_api_key: bool = False,
+    ) -> Tenant:
+        tenant = self.get_tenant(tenant_id)
+        if tenant is None:
+            raise ValueError(f"Tenant {tenant_id} not found.")
+        cleaned_base = api_base.strip().rstrip("/") or "https://api.openai.com/v1"
+        cleaned_model = model.strip() or "gpt-4o-mini"
+        if any(char in cleaned_model for char in "\r\n\t"):
+            raise ValueError("Model name is invalid.")
+        if clear_api_key:
+            stored_key = None
+        elif api_key is not None and api_key.strip():
+            stored_key = api_key.strip()
+        else:
+            stored_key = tenant.insights_api_key
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE tenants
+                SET insights_api_base = ?, insights_model = ?, insights_api_key = ?
+                WHERE id = ?
+                """,
+                (cleaned_base, cleaned_model, stored_key, tenant_id),
+            )
+        updated = self.get_tenant(tenant_id)
+        if updated is None:
+            raise RuntimeError("Failed to update tenant insights.")
         return updated
 
     def update_tenant_gmail_token(self, tenant_id: int, token_json: str) -> None:

@@ -75,5 +75,43 @@
         {% if gmail_status == 'disconnected' %}Connect Gmail{% else %}Reconnect Gmail{% endif %}
       </a>
     </section>
+
+    <section class="panel">
+      <h2>AI insights</h2>
+      <p class="settings-help">
+        Used on the Report page. Each request sends income and expense totals plus
+        transaction lines (date, name, amount, bucket, and person) to this provider.
+        Email text is not included.
+      </p>
+      <form method="post" action="{{ url_for('settings_insights') }}" class="settings-form">
+        <label class="field">
+          <span>API base URL</span>
+          <input type="url" name="insights_api_base" value="{{ insights_api_base }}" required>
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input type="text" name="insights_model" value="{{ insights_model }}" required>
+        </label>
+        <label class="field">
+          <span>API key</span>
+          <input type="password"
+                 name="insights_api_key"
+                 value=""
+                 autocomplete="new-password"
+                 placeholder="{% if insights_api_key_mask %}Leave blank to keep the saved key{% else %}Paste an API key{% endif %}">
+        </label>
+        {% if insights_api_key_mask %}
+          <p class="settings-help">Saved key: {{ insights_api_key_mask }}</p>
+          <label class="checkbox">
+            <input type="checkbox" name="clear_insights_api_key" value="on">
+            <span>Remove the saved key</span>
+          </label>
+        {% endif %}
+        <p class="settings-help">
+          OpenAI-compatible base URL, such as <code>https://api.openai.com/v1</code>.
+        </p>
+        <button type="submit" class="btn btn-primary">Save AI settings</button>
+      </form>
+    </section>
   </div>
 {% endblock %}

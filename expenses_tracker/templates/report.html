@@ -1,12 +1,25 @@
 {% extends "base.html" %}
 {% block title %}Report · Expenses Tracker{% endblock %}
 {% block content %}
-<section class="page-head">
+<section class="page-head page-head-row">
   <div>
     <h1>{% if view == 'ytd' %}Year-to-date report{% else %}Monthly report{% endif %}</h1>
     <p class="subtitle">
       {% if view == 'ytd' %}{{ range_label }} · {% endif %}Out-of-pocket totals (reimbursements excluded)
     </p>
+  </div>
+  <div class="report-export-links">
+    {% if person %}
+      <a class="btn btn-secondary"
+         href="{{ url_for('report_export', month=month, view=view, scope='period', person=person) }}">Download CSV</a>
+      <a class="btn btn-secondary"
+         href="{{ url_for('report_export', month=month, view=view, scope='all', person=person) }}">All history</a>
+    {% else %}
+      <a class="btn btn-secondary"
+         href="{{ url_for('report_export', month=month, view=view, scope='period') }}">Download CSV</a>
+      <a class="btn btn-secondary"
+         href="{{ url_for('report_export', month=month, view=view, scope='all') }}">All history</a>
+    {% endif %}
   </div>
 </section>
 
@@ -108,6 +121,23 @@
     </div>
   {% endif %}
 </section>
+
+<section class="panel" id="report-insights"
+         data-insights-url="{{ url_for('report_insights') }}"
+         data-month="{{ month }}"
+         data-view="{{ view }}"
+         data-person="{{ person or '' }}">
+  <h2>Insights</h2>
+  {% if insights_configured %}
+    <button type="button" class="btn btn-primary" id="report-insights-button">Get insights</button>
+  {% else %}
+    <a class="btn btn-secondary" href="{{ url_for('settings_page') }}">Get insights</a>
+    <p class="settings-help">Add an API key in Settings to analyze this report.</p>
+  {% endif %}
+  <p class="report-insights-status" id="report-insights-status" hidden></p>
+  <div class="report-insights-body" id="report-insights-body" hidden></div>
+</section>
+
 <div id="report-chart-context-menu" class="report-chart-context-menu" hidden role="menu">
   <button type="button" class="report-chart-context-item" id="report-chart-context-action" role="menuitem"></button>
 </div>
@@ -736,6 +766,53 @@
           },
         },
       },
+    });
+  }
+</script>
+<script>
+  const insightsButton = document.getElementById("report-insights-button");
+  const insightsPanel = document.getElementById("report-insights");
+  if (insightsButton && insightsPanel) {
+    insightsButton.addEventListener("click", async () => {
+      const status = document.getElementById("report-insights-status");
+      const body = document.getElementById("report-insights-body");
+      insightsButton.disabled = true;
+      status.hidden = false;
+      status.textContent = "Analyzing this report…";
+      body.hidden = true;
+      body.textContent = "";
+      try {
+        const response = await fetch(insightsPanel.dataset.insightsUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: JSON.stringify({
+            month: insightsPanel.dataset.month,
+            view: insightsPanel.dataset.view,
+            person: insightsPanel.dataset.person,
+          }),
+        });
+        let data = {};
+        try {
+          data = await response.json();
+        } catch (err) {
+          status.textContent = "Insights could not be generated.";
+          return;
+        }
+        if (!response.ok) {
+          status.textContent = data.error || "Insights could not be generated.";
+          return;
+        }
+        status.hidden = true;
+        body.hidden = false;
+        body.textContent = data.insight || "";
+      } catch (err) {
+        status.textContent = "Insights could not be generated.";
+      } finally {
+        insightsButton.disabled = false;
+      }
     });
   }
 </script>

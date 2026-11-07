@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, flash, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup
 
 from expenses_tracker.auth import (
@@ -31,7 +31,15 @@ from expenses_tracker.dates import (
     ytd_start_month,
 )
 from expenses_tracker.display import format_merchant
+from expenses_tracker.export_csv import build_export_rows, export_filename, render_csv
 from expenses_tracker.gmail_client import GmailClient
+from expenses_tracker.insights import (
+    InsightsError,
+    build_insight_payload,
+    mask_api_key,
+    normalize_api_base,
+    request_insights,
+)
 from expenses_tracker.models import ExpenseStatus, MatchType, NotificationType
 from expenses_tracker.notifications import format_notification_time, notification_to_dict
 from expenses_tracker.email_import import (
@@ -1138,8 +1146,58 @@ def create_app(settings: Settings | None = None) -> Flask:
             net_total=net_total,
             net_label="Left over" if net_total >= 0 else "Shortfall",
             view=view,
+            insights_configured=bool((sync.tenant.insights_api_key or "").strip()),
             page="report",
         )
+
+    @app.get("/report/export.csv")
+    def report_export():
+        db, _sync = _services()
+        month = request.args.get("month", "").strip()
+        person = (request.args.get("person") or "").strip() or None
+        view = request.args.get("view", "month").strip().lower()
+        scope = request.args.get("scope", "period").strip().lower()
+        if view not in ("month", "ytd"):
+            view = "month"
+        if scope not in ("period", "all"):
+            scope = "period"
+        if scope != "all" and not _valid_month(month):
+            month = app_month(settings)
+        rows = build_export_rows(
+            db,
+            month=month,
+            view=view,
+            person=person,
+            scope=scope,
+        )
+        filename = export_filename(month=month, view=view, scope=scope)
+        return Response(
+            render_csv(rows),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.post("/report/insights")
+    def report_insights():
+        db, sync = _services()
+        payload_in = request.get_json(silent=True) or {}
+        month = str(payload_in.get("month") or request.form.get("month") or "").strip()
+        view = str(payload_in.get("view") or request.form.get("view") or "month").strip().lower()
+        person = str(payload_in.get("person") or request.form.get("person") or "").strip() or None
+        if view not in ("month", "ytd"):
+            view = "month"
+        if not _valid_month(month):
+            return jsonify(error="Choose a valid month."), 400
+        if not (sync.tenant.insights_api_key or "").strip():
+            return jsonify(error="Add an API key in Settings before requesting insights."), 400
+        try:
+            summary = build_insight_payload(db, month=month, view=view, person=person)
+            text = request_insights(sync.tenant, summary)
+        except InsightsError as exc:
+            return jsonify(error=str(exc)), 502
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(insight=text)
 
     @app.route("/rules")
     def rules():
@@ -1258,8 +1316,37 @@ def create_app(settings: Settings | None = None) -> Flask:
             gmail_status_detail=_friendly_gmail_status_detail(gmail_status_detail),
             gmail_connected=gmail_status == "connected",
             notify_email=user.notify_email if user is not None else False,
+            insights_api_base=tenant.insights_api_base,
+            insights_model=tenant.insights_model,
+            insights_api_key_mask=mask_api_key(tenant.insights_api_key),
             page="settings",
         )
+
+    @app.post("/settings/insights")
+    def settings_insights():
+        _db, sync = _services()
+        tenant = sync.tenant
+        auth_db = build_global_db(settings)
+        api_base_raw = request.form.get("insights_api_base", "")
+        model = request.form.get("insights_model", "")
+        api_key = request.form.get("insights_api_key", "")
+        clear_api_key = request.form.get("clear_insights_api_key") == "on"
+        if api_key.strip():
+            clear_api_key = False
+        try:
+            api_base = normalize_api_base(api_base_raw)
+            auth_db.update_tenant_insights(
+                tenant.id,
+                api_base=api_base,
+                model=model,
+                api_key=api_key if api_key.strip() else None,
+                clear_api_key=clear_api_key,
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("settings_page"))
+        flash("AI insights settings saved.", "success")
+        return redirect(url_for("settings_page"))
 
     @app.route("/settings/notifications", methods=["POST"])
     def settings_notifications():
