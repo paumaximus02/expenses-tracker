@@ -303,7 +303,7 @@ class InsightsAndExportRouteTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_export_route_downloads_the_current_month(self) -> None:
-        response = self.client.get("/report/export.csv?month=2026-03&view=month&scope=period")
+        response = self.client.get("/report/export.csv?month=2026-03&view=month&scope=period&preview=1")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/csv", response.content_type)
         self.assertIn('filename="expenses-2026-03.csv"', response.headers["Content-Disposition"])
@@ -317,7 +317,7 @@ class InsightsAndExportRouteTests(unittest.TestCase):
         self.assertIn('filename="expenses-all.csv"', history.headers["Content-Disposition"])
 
     def test_report_links_to_settings_until_a_key_is_saved(self) -> None:
-        page = self.client.get("/report?month=2026-03")
+        page = self.client.get("/report?month=2026-03&preview=1")
         self.assertEqual(page.status_code, 200)
         self.assertIn(b"Download CSV", page.data)
         self.assertIn(b"All history", page.data)
@@ -327,7 +327,7 @@ class InsightsAndExportRouteTests(unittest.TestCase):
     def test_settings_save_stores_the_key_and_shows_only_the_mask(self) -> None:
         with patch.object(GmailClient, "verify_connection", return_value=("disconnected", None)):
             response = self.client.post(
-                "/settings/insights",
+                "/settings/insights?preview=1",
                 data={
                     "insights_api_base": "https://example.test/v1/",
                     "insights_model": "gpt-4o-mini",
@@ -350,7 +350,7 @@ class InsightsAndExportRouteTests(unittest.TestCase):
 
     def test_insights_route_requires_a_key(self) -> None:
         response = self.client.post(
-            "/report/insights",
+            "/report/insights?preview=1",
             json={"month": "2026-03", "view": "month", "person": ""},
         )
         self.assertEqual(response.status_code, 400)
@@ -359,7 +359,7 @@ class InsightsAndExportRouteTests(unittest.TestCase):
     def test_invalid_api_base_is_rejected(self) -> None:
         with patch.object(GmailClient, "verify_connection", return_value=("disconnected", None)):
             response = self.client.post(
-                "/settings/insights",
+                "/settings/insights?preview=1",
                 data={
                     "insights_api_base": "ftp://files.example",
                     "insights_model": "gpt-4o-mini",
@@ -371,6 +371,29 @@ class InsightsAndExportRouteTests(unittest.TestCase):
         tenant = Database(self.db_path).get_tenant(self.tenant_id)
         assert tenant is not None
         self.assertIsNone(tenant.insights_api_key)
+
+    def test_preview_flag_gates_the_features(self) -> None:
+        hidden = self.client.get("/report?month=2026-03")
+        self.assertNotIn(b"Download CSV", hidden.data)
+        self.assertNotIn(b"Get insights", hidden.data)
+        self.assertEqual(self.client.get("/report/export.csv?month=2026-03").status_code, 404)
+        self.assertEqual(self.client.post("/report/insights", json={"month": "2026-03"}).status_code, 404)
+
+        shown = self.client.get("/report?month=2026-03&preview=1")
+        self.assertIn(b"Download CSV", shown.data)
+        self.assertIn(b"Get insights", shown.data)
+        self.assertEqual(
+            self.client.get("/report/export.csv?month=2026-03&view=month&scope=period").status_code,
+            200,
+        )
+
+        with patch.object(GmailClient, "verify_connection", return_value=("disconnected", None)):
+            settings_page = self.client.get("/settings")
+        self.assertIn(b"AI insights", settings_page.data)
+
+        turned_off = self.client.get("/report?month=2026-03&preview=0")
+        self.assertNotIn(b"Download CSV", turned_off.data)
+        self.assertEqual(self.client.get("/report/export.csv?month=2026-03").status_code, 404)
 
 
 if __name__ == "__main__":

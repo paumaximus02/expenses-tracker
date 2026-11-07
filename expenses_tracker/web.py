@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from flask import Flask, Response, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup
 
 from expenses_tracker.auth import (
@@ -137,6 +137,23 @@ def create_app(settings: Settings | None = None) -> Flask:
     def _services():
         return build_services(settings)
 
+    def _sync_feature_preview() -> None:
+        """Turn the insights and export preview on or off for this browser session."""
+        if "preview" not in request.args:
+            return
+        raw = request.args.get("preview", "").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            session["feature_preview"] = True
+        elif raw in {"0", "false", "no", "off"}:
+            session.pop("feature_preview", None)
+
+    def _feature_preview_enabled() -> bool:
+        return bool(session.get("feature_preview"))
+
+    @app.before_request
+    def remember_feature_preview():
+        _sync_feature_preview()
+
     @app.before_request
     def require_login():
         if settings.auth_disabled:
@@ -186,6 +203,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             "notifications_unread_count": 0,
             "current_tenant": None,
             "sync_in_progress": False,
+            "feature_preview": _feature_preview_enabled(),
         }
 
         if settings.auth_disabled or user is not None:
@@ -1152,6 +1170,8 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.get("/report/export.csv")
     def report_export():
+        if not _feature_preview_enabled():
+            abort(404)
         db, _sync = _services()
         month = request.args.get("month", "").strip()
         person = (request.args.get("person") or "").strip() or None
@@ -1179,6 +1199,8 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.post("/report/insights")
     def report_insights():
+        if not _feature_preview_enabled():
+            abort(404)
         db, sync = _services()
         payload_in = request.get_json(silent=True) or {}
         month = str(payload_in.get("month") or request.form.get("month") or "").strip()
@@ -1324,6 +1346,8 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.post("/settings/insights")
     def settings_insights():
+        if not _feature_preview_enabled():
+            abort(404)
         _db, sync = _services()
         tenant = sync.tenant
         auth_db = build_global_db(settings)

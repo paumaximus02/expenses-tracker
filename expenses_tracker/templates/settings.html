@@ -76,6 +76,7 @@
       </a>
     </section>
 
+    {% if feature_preview %}
     <section class="panel">
       <h2>AI insights</h2>
       <p class="settings-help">
@@ -113,5 +114,6 @@
         <button type="submit" class="btn btn-primary">Save AI settings</button>
       </form>
     </section>
+    {% endif %}
   </div>
 {% endblock %}

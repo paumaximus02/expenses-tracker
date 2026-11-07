@@ -8,6 +8,7 @@
       {% if view == 'ytd' %}{{ range_label }} · {% endif %}Out-of-pocket totals (reimbursements excluded)
     </p>
   </div>
+  {% if feature_preview %}
   <div class="report-export-links">
     {% if person %}
       <a class="btn btn-secondary"
@@ -21,6 +22,7 @@
          href="{{ url_for('report_export', month=month, view=view, scope='all') }}">All history</a>
     {% endif %}
   </div>
+  {% endif %}
 </section>
 
 <form method="get" action="{{ url_for('report') }}" class="filters report-filters" id="report-filter-form">
@@ -122,6 +124,7 @@
   {% endif %}
 </section>
 
+{% if feature_preview %}
 <section class="panel" id="report-insights"
          data-insights-url="{{ url_for('report_insights') }}"
          data-month="{{ month }}"
@@ -137,6 +140,7 @@
   <p class="report-insights-status" id="report-insights-status" hidden></p>
   <div class="report-insights-body" id="report-insights-body" hidden></div>
 </section>
+{% endif %}
 
 <div id="report-chart-context-menu" class="report-chart-context-menu" hidden role="menu">
   <button type="button" class="report-chart-context-item" id="report-chart-context-action" role="menuitem"></button>
