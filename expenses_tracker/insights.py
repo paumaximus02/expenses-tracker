@@ -160,26 +160,9 @@ def build_insight_payload(
     }
 
 
-def _provider_error_detail(raw: bytes, api_key: str) -> str:
-    """Short provider message safe to show in the app."""
-    text = raw.decode("utf-8", errors="replace").strip()
-    message = ""
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        message = text
-    else:
-        error = data.get("error") if isinstance(data, dict) else None
-        if isinstance(error, dict):
-            message = str(error.get("message") or "")
-        elif isinstance(error, str):
-            message = error
-    message = " ".join(message.split())
-    if api_key:
-        message = message.replace(api_key, "")
-    if len(message) > 180:
-        message = message[:177].rstrip() + "..."
-    return message.strip()
+def _key_debug(label: str, key: str | None) -> str:
+    shown = key or ""
+    return f"{label}: {shown}\n{label} with hidden characters visible: {shown!r} ({len(shown)} characters)"
 
 
 def request_insights(tenant: Tenant, payload: dict) -> str:
@@ -216,14 +199,19 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
         with urllib.request.urlopen(request, timeout=INSIGHTS_TIMEOUT_SECONDS) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = ""
         try:
-            detail = _provider_error_detail(exc.read(), api_key)
+            provider_body = exc.read().decode("utf-8", errors="replace").strip()
         except Exception:
-            detail = ""
-        message = f"The insights service returned HTTP {exc.code}."
-        if detail:
-            message = f"{message} {detail}"
+            provider_body = ""
+        message = "\n".join(
+            [
+                f"The insights service returned HTTP {exc.code}.",
+                f"Provider response: {provider_body or '(empty)'}",
+                _key_debug("Stored key", tenant.insights_api_key),
+                _key_debug("Sent key", api_key),
+                f"Request URL: {url}",
+            ]
+        )
         raise InsightsError(message) from exc
     except TimeoutError as exc:
         raise InsightsError("The insights service timed out.") from exc

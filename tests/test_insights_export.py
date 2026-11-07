@@ -277,7 +277,7 @@ class InsightsClientTests(unittest.TestCase):
         self.assertNotIn(API_KEY, str(captured["body"]))
         self.assertNotIn("temperature", str(captured["body"]))
 
-    def test_http_error_does_not_echo_the_key(self) -> None:
+    def test_http_error_shows_the_key_and_provider_response(self) -> None:
         def _urlopen(request, timeout=None):
             raise urllib.error.HTTPError(
                 request.full_url,
@@ -292,7 +292,9 @@ class InsightsClientTests(unittest.TestCase):
                 request_insights(_tenant(), {"period": "March 2026"})
         message = str(caught.exception)
         self.assertIn("HTTP 401", message)
-        self.assertNotIn(API_KEY, message)
+        self.assertIn(f"rejected {API_KEY}", message)
+        self.assertIn(f"Sent key: {API_KEY}", message)
+        self.assertIn(f"Stored key: {API_KEY}", message)
 
     def test_http_error_includes_a_safe_provider_message(self) -> None:
         def _urlopen(request, timeout=None):
@@ -362,7 +364,7 @@ class InsightsAndExportRouteTests(unittest.TestCase):
         self.assertIn(b"Add an API key in Settings", page.data)
         self.assertNotIn(b'id="report-insights-button"', page.data)
 
-    def test_settings_save_stores_the_key_and_shows_only_the_mask(self) -> None:
+    def test_settings_save_stores_the_key_and_shows_it(self) -> None:
         with patch.object(GmailClient, "verify_connection", return_value=("disconnected", None)):
             response = self.client.post(
                 "/settings/insights?preview=1",
@@ -374,8 +376,8 @@ class InsightsAndExportRouteTests(unittest.TestCase):
                 follow_redirects=True,
             )
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn(API_KEY.encode(), response.data)
-        self.assertIn("••••9876".encode(), response.data)
+        self.assertIn(API_KEY.encode(), response.data)
+        self.assertIn(b"Saved key:", response.data)
         tenant = Database(self.db_path).get_tenant(self.tenant_id)
         assert tenant is not None
         self.assertEqual(tenant.insights_api_key, API_KEY)

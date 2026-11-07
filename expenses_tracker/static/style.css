@@ -390,6 +390,17 @@ body {
 .report-insights-status {
   margin: 0.75rem 0 0;
   color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.insights-key-debug {
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.65rem 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
 }
 
 .report-insights-body {

@@ -103,8 +103,9 @@
                  spellcheck="false"
                  placeholder="{% if insights_api_key_mask %}Leave blank to keep the saved key{% else %}Paste an API key{% endif %}">
         </label>
-        {% if insights_api_key_mask %}
-          <p class="settings-help">Saved key: {{ insights_api_key_mask }}</p>
+        {% if insights_api_key %}
+          <p class="settings-help">Saved key:</p>
+          <pre class="insights-key-debug">{{ insights_api_key }}</pre>
           <label class="checkbox">
             <input type="checkbox" name="clear_insights_api_key" value="on">
             <span>Remove the saved key</span>

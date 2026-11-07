@@ -1343,6 +1343,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             insights_api_base=tenant.insights_api_base,
             insights_model=tenant.insights_model,
             insights_api_key_mask=mask_api_key(tenant.insights_api_key),
+            insights_api_key=tenant.insights_api_key or "",
             page="settings",
         )
 
