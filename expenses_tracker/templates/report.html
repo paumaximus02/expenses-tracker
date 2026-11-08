@@ -803,7 +803,7 @@
         try {
           data = await response.json();
         } catch (err) {
-          status.textContent = "Insights could not be generated.";
+          status.textContent = `Insights could not be generated (HTTP ${response.status}).`;
           return;
         }
         if (!response.ok) {

@@ -330,7 +330,15 @@ class InsightsClientTests(unittest.TestCase):
         class _Response:
             def read(self) -> bytes:
                 return json.dumps(
-                    {"choices": [{"message": {"content": "Look at the mortgage."}}]}
+                    {
+                        "output": [
+                            {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "thinking"}]},
+                            {
+                                "type": "message",
+                                "content": [{"type": "output_text", "text": "Look at the mortgage."}],
+                            },
+                        ]
+                    }
                 ).encode()
 
             def __enter__(self):
@@ -340,6 +348,7 @@ class InsightsClientTests(unittest.TestCase):
                 return False
 
         def _urlopen(request, timeout=None):
+            captured["url"] = request.full_url
             captured["body"] = request.data.decode()
             captured["timeout"] = timeout
             return _Response()
@@ -350,10 +359,13 @@ class InsightsClientTests(unittest.TestCase):
             insights_api_key="xai-test-secret-key-9876",
         )
         with patch("expenses_tracker.insights.urllib.request.urlopen", side_effect=_urlopen):
-            request_insights(tenant, {"period": "November 2026", "lines": [{"name": "Store"}]})
+            text = request_insights(tenant, {"period": "November 2026", "lines": [{"name": "Store"}]})
 
         sent = json.loads(str(captured["body"]))
-        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assertEqual(text, "Look at the mortgage.")
+        self.assertEqual(captured["url"], "https://api.x.ai/v1/responses")
+        self.assertEqual(sent["reasoning"], {"effort": "low"})
+        self.assertNotIn("messages", sent)
         self.assertEqual(sent["model"], "grok-4.7")
         self.assertEqual(captured["timeout"], 120)
         self.assertNotIn("temperature", sent)

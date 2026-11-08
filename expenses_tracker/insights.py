@@ -305,6 +305,50 @@ def _request_payload(payload: dict) -> dict:
     return {key: value for key, value in payload.items() if key != "lines"}
 
 
+def _uses_responses_api(api_base: str) -> bool:
+    """Grok 4 returns its answer from /v1/responses. Chat completions stays empty."""
+    return urllib.parse.urlparse(api_base).netloc.lower().endswith(".x.ai")
+
+
+def _text_from_content(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part.strip())
+        elif isinstance(part, dict):
+            text = part.get("text") or part.get("content")
+            if isinstance(text, str):
+                parts.append(text.strip())
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _insight_text(data: dict) -> str:
+    output_text = data.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+    output = data.get("output")
+    if isinstance(output, list):
+        messages: list[str] = []
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") not in (None, "message"):
+                continue
+            text = _text_from_content(item.get("content"))
+            if text:
+                messages.append(text)
+        if messages:
+            return "\n".join(messages).strip()
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        message = choices[0].get("message")
+        if isinstance(message, dict):
+            return _text_from_content(message.get("content"))
+    return ""
+
+
 def request_insights(tenant: Tenant, payload: dict) -> str:
     api_key = clean_api_key(tenant.insights_api_key)
     if not api_key:
@@ -313,24 +357,32 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
 
     base = normalize_api_base(tenant.insights_api_base or DEFAULT_INSIGHTS_API_BASE)
     model = (tenant.insights_model or DEFAULT_INSIGHTS_MODEL).strip() or DEFAULT_INSIGHTS_MODEL
-    url = f"{base}/chat/completions"
+    user_content = (
+        "Name the specific charges and income entries to look into.\n"
+        + json.dumps(_request_payload(payload), ensure_ascii=True)
+    )
     # Reasoning models such as Grok reject temperature with HTTP 400.
-    # Grok 4.7 defaults to a long reasoning pass, which blows the request wait.
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": INSIGHTS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    "Name the specific charges and income entries to look into.\n"
-                    + json.dumps(_request_payload(payload), ensure_ascii=True)
-                ),
-            },
-        ],
-    }
-    if urllib.parse.urlparse(base).netloc.lower().endswith(".x.ai"):
-        body["reasoning_effort"] = "low"
+    # Grok 4.7 defaults to a long reasoning pass and, on chat completions,
+    # can finish with reasoning tokens and no answer text.
+    if _uses_responses_api(base):
+        url = f"{base}/responses"
+        body = {
+            "model": model,
+            "reasoning": {"effort": "low"},
+            "input": [
+                {"role": "system", "content": INSIGHTS_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        }
+    else:
+        url = f"{base}/chat/completions"
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": INSIGHTS_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        }
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -363,9 +415,11 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
 
     try:
         data = json.loads(raw)
-        text = data["choices"][0]["message"]["content"]
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+    except json.JSONDecodeError as exc:
         raise InsightsError("The insights service returned an unexpected response.") from exc
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(data, dict):
+        raise InsightsError("The insights service returned an unexpected response.")
+    text = _insight_text(data)
+    if not text:
         raise InsightsError("The insights service returned an empty briefing.")
-    return text.strip()
+    return text
