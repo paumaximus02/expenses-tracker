@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -11,7 +12,7 @@ from expenses_tracker.models import Tenant
 DEFAULT_INSIGHTS_API_BASE = "https://api.openai.com/v1"
 DEFAULT_INSIGHTS_MODEL = "gpt-4o-mini"
 INSIGHTS_LINE_CAP = 500
-INSIGHTS_TIMEOUT_SECONDS = 30
+INSIGHTS_TIMEOUT_SECONDS = 120
 
 INSIGHTS_SYSTEM_PROMPT = (
     "You review one household's income and expenses and name the specific charges "
@@ -26,8 +27,8 @@ INSIGHTS_SYSTEM_PROMPT = (
     "Do not give general budgeting advice. "
     "If nothing in the data is worth a closer look, say that in one sentence. "
     "excluded_expense_total is money left out of spending, not extra spending. "
-    "look_into is computed from the full period. If omitted_line_count is greater than zero, "
-    "the lines list keeps only the largest amounts."
+    "look_into is already narrowed to the charges worth checking. "
+    "If omitted_line_count is greater than zero, that many smaller transactions were left out of it."
 )
 
 
@@ -299,6 +300,11 @@ def _provider_error_detail(body: str, *secrets: str | None) -> str:
     return detail
 
 
+def _request_payload(payload: dict) -> dict:
+    """Drop the raw transaction list. look_into already names what to cite."""
+    return {key: value for key, value in payload.items() if key != "lines"}
+
+
 def request_insights(tenant: Tenant, payload: dict) -> str:
     api_key = clean_api_key(tenant.insights_api_key)
     if not api_key:
@@ -309,6 +315,7 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
     model = (tenant.insights_model or DEFAULT_INSIGHTS_MODEL).strip() or DEFAULT_INSIGHTS_MODEL
     url = f"{base}/chat/completions"
     # Reasoning models such as Grok reject temperature with HTTP 400.
+    # Grok 4.7 defaults to a long reasoning pass, which blows the request wait.
     body = {
         "model": model,
         "messages": [
@@ -317,11 +324,13 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
                 "role": "user",
                 "content": (
                     "Name the specific charges and income entries to look into.\n"
-                    + json.dumps(payload, ensure_ascii=True)
+                    + json.dumps(_request_payload(payload), ensure_ascii=True)
                 ),
             },
         ],
     }
+    if urllib.parse.urlparse(base).netloc.lower().endswith(".x.ai"):
+        body["reasoning_effort"] = "low"
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -348,6 +357,8 @@ def request_insights(tenant: Tenant, payload: dict) -> str:
     except TimeoutError as exc:
         raise InsightsError("The insights service timed out.") from exc
     except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), (TimeoutError, socket.timeout)):
+            raise InsightsError("The insights service timed out.") from exc
         raise InsightsError("Could not reach the insights service.") from exc
 
     try:

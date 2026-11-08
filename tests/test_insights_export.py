@@ -314,11 +314,49 @@ class InsightsClientTests(unittest.TestCase):
 
         self.assertEqual(text, "Groceries led the month.")
         self.assertEqual(captured["url"], "https://api.openai.com/v1/chat/completions")
-        self.assertEqual(captured["timeout"], 30)
+        self.assertEqual(captured["timeout"], 120)
+        sent = json.loads(str(captured["body"]))
+        self.assertNotIn("reasoning_effort", sent)
+        user_payload = json.loads(sent["messages"][1]["content"].split("\n", 1)[1])
+        self.assertNotIn("lines", user_payload)
         self.assertNotIn(API_KEY, str(captured["body"]))
         self.assertNotIn("temperature", str(captured["body"]))
         self.assertIn("Name the specific charges and income entries to look into.", str(captured["body"]))
         self.assertIn("Do not give general budgeting advice.", str(captured["body"]))
+
+    def test_xai_requests_use_a_short_reasoning_pass(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _Response:
+            def read(self) -> bytes:
+                return json.dumps(
+                    {"choices": [{"message": {"content": "Look at the mortgage."}}]}
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> bool:
+                return False
+
+        def _urlopen(request, timeout=None):
+            captured["body"] = request.data.decode()
+            captured["timeout"] = timeout
+            return _Response()
+
+        tenant = _tenant(
+            insights_api_base="https://api.x.ai/v1",
+            insights_model="grok-4.7",
+            insights_api_key="xai-test-secret-key-9876",
+        )
+        with patch("expenses_tracker.insights.urllib.request.urlopen", side_effect=_urlopen):
+            request_insights(tenant, {"period": "November 2026", "lines": [{"name": "Store"}]})
+
+        sent = json.loads(str(captured["body"]))
+        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assertEqual(sent["model"], "grok-4.7")
+        self.assertEqual(captured["timeout"], 120)
+        self.assertNotIn("temperature", sent)
 
     def test_http_error_hides_the_key(self) -> None:
         def _urlopen(request, timeout=None):
